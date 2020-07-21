@@ -6,31 +6,25 @@ use futures::stream::{self, StreamExt};
 use futures::{future};
 use bytes::{Bytes, BytesMut, BufMut};
 use std::convert::Infallible;
+use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
 use std::sync::Arc;
-use std::collections::{HashMap, HashSet};
 use actix_service::Service;
 use actix_session::{CookieSession, UserSession};
+use tokio::signal::unix::{signal, SignalKind};
 use serde::Serialize;
 use serde_json;
 
 mod cfg;
 mod task;
 mod auth;
+mod app_state;
 
+use app_state::AppState;
 use task::TaskEvent;
-
-#[derive(Clone)]
-struct AppState {
-    config: cfg::Config,
-    task_ids: Vec<String>,
-    tasks: HashMap<String, Arc<RwLock<task::TaskState>>>,
-    events: tokio::sync::broadcast::Sender<(String, TaskEvent)>
-}
 
 #[derive(Debug, Serialize)]
 struct TaskData<'a> {
-    id: usize,
     name: &'a str,
     meta: &'a serde_json::Value,
     state: &'static str,
@@ -40,29 +34,29 @@ struct TaskData<'a> {
 }
 
 fn can_run_task(req: &HttpRequest) -> bool {
-    let data: &web::Data<AppState> = req.app_data().unwrap();
+    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
     let login = req.headers().get("x-user").unwrap().to_str().unwrap();
     let task = req.match_info().get("task").unwrap();
-    data.config.users.get(login).unwrap().can_run.iter().find(|t| *t == task).is_some()
+    data.read().config.users.get(login).unwrap().can_run.iter().find(|t| *t == task).is_some()
 }
 
 fn can_view_output(req: &HttpRequest) -> bool {
-    let data: &web::Data<AppState> = req.app_data().unwrap();
+    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
     let login = req.headers().get("x-user").unwrap().to_str().unwrap();
     let task = req.match_info().get("task").unwrap();
-    data.config.users.get(login).unwrap().can_view_output.iter().find(|t| *t == task).is_some()
+    data.read().config.users.get(login).unwrap().can_view_output.iter().find(|t| *t == task).is_some()
 }
 
 #[get("/tasks")]
-async fn tasks(req: HttpRequest, data: web::Data<AppState>) -> HttpResponse {
+async fn tasks(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     let login = req.headers().get("x-user").unwrap().to_str().unwrap();
+    let data = data.read();
     let can_run: HashSet<_> = data.config.users.get(login).unwrap().can_run.iter().collect();
     let can_view_output: HashSet<_> = data.config.users.get(login).unwrap().can_view_output.iter().collect();
     HttpResponse::Ok().json(
         data.config.users.get(login).unwrap().can_view_status.iter().map(|name| {
             let task = data.tasks.get(name).unwrap().read();
             (name, TaskData {
-                id: task.id,
                 name: name,
                 meta: &data.config.tasks[name].meta,
                 state: match task.status {
@@ -78,11 +72,12 @@ async fn tasks(req: HttpRequest, data: web::Data<AppState>) -> HttpResponse {
     )
 }
 
-async fn run_task(req: &HttpRequest, data: &web::Data<AppState>, params: &web::Path<(String,)>) -> Result<(), HttpResponse> {
+async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, params: &web::Path<(String,)>) -> Result<(), HttpResponse> {
     if !can_run_task(&req) {
         return Err(HttpResponse::NotFound().finish())
     }
-    let events = data.events.clone();
+    let events = data.read().events.clone();
+    let data = data.read();
     let ref task = data.config.tasks.get(&params.0).unwrap();
     let ref cmdline = task.command;
     let state = data.tasks.get(&params.0).unwrap().clone();
@@ -95,11 +90,12 @@ async fn run_task(req: &HttpRequest, data: &web::Data<AppState>, params: &web::P
     Ok(())
 }
 
-async fn stream_task(req: &HttpRequest, data: &web::Data<AppState>, params: &web::Path<(String,)>, print_output: bool) -> Result<HttpResponse, HttpResponse> {
+async fn stream_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, params: &web::Path<(String,)>, print_output: bool) -> Result<HttpResponse, HttpResponse> {
     if !can_view_output(&req) {
         return Err(HttpResponse::NotFound().finish())
     }
 
+    let data = data.read();
     let task = data.tasks.get(&params.0).unwrap().read();
     let receiver = task.events.subscribe();
 
@@ -140,7 +136,7 @@ async fn stream_task(req: &HttpRequest, data: &web::Data<AppState>, params: &web
 }
 
 #[post("/task/{task}/output")]
-async fn task_run_stream(req: HttpRequest, data: web::Data<AppState>, params: web::Path<(String,)>) -> HttpResponse {
+async fn task_run_stream(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>) -> HttpResponse {
     let stream = match stream_task(&req, &data, &params, false).await {
         Ok(stream) => stream,
         Err(response) => return response
@@ -154,7 +150,7 @@ async fn task_run_stream(req: HttpRequest, data: web::Data<AppState>, params: we
 }
 
 #[post("/task/{task}")]
-async fn task_run(req: HttpRequest, data: web::Data<AppState>, params: web::Path<(String,)>) -> actix_web::Result<HttpResponse> {
+async fn task_run(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>) -> actix_web::Result<HttpResponse> {
     if let Err(response) = run_task(&req, &data, &params).await {
         return Ok(response)
     }
@@ -163,12 +159,12 @@ async fn task_run(req: HttpRequest, data: web::Data<AppState>, params: web::Path
 }
 
 #[post("/task/{task}/stop")]
-async fn task_stop(req: HttpRequest, data: web::Data<AppState>, params: web::Path<(String,)>) -> HttpResponse {
+async fn task_stop(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>) -> HttpResponse {
     if !can_run_task(&req) {
         return HttpResponse::NotFound().finish()
     }
 
-    let state = data.tasks.get(&params.0).unwrap().clone();
+    let state = data.read().tasks.get(&params.0).unwrap().clone();
     if state.read().status == task::TaskStatus::Running {
         if let Err(e) = task::stop_task(state).await {
             return HttpResponse::InternalServerError().body(format!("Stopping task failed: {}", e));
@@ -179,17 +175,18 @@ async fn task_stop(req: HttpRequest, data: web::Data<AppState>, params: web::Pat
 }
 
 #[get("/task/{task}/output")]
-async fn task_stream(req: HttpRequest, data: web::Data<AppState>, params: web::Path<(String,)>) -> HttpResponse {
+async fn task_stream(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>) -> HttpResponse {
     if !can_view_output(&req) {
         return HttpResponse::NotFound().finish()
     }
 
-    let task = data.tasks.get(&params.0).unwrap().read();
+    let data_read = data.read();
+    let task = data_read.tasks.get(&params.0).unwrap().read();
     if task.status != task::TaskStatus::Running {
         let mut resp = HttpResponse::Ok();
         resp.header("content-type", "text/plain; charset=utf-8");
         resp.header("x-content-type-options", "nosniff");
-        for (name, value) in &data.config.tasks.get(&params.0).unwrap().headers {
+        for (name, value) in &data_read.config.tasks.get(&params.0).unwrap().headers {
             resp.set_header(name, value.as_str());
         }
         
@@ -199,10 +196,10 @@ async fn task_stream(req: HttpRequest, data: web::Data<AppState>, params: web::P
 }
 
 #[get("/events")]
-async fn sse(req: HttpRequest, data: web::Data<AppState>) -> HttpResponse {
-    let receiver = data.events.subscribe();
+async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
+    let receiver = data.read().events.subscribe();
     let login = req.headers().get("x-user").unwrap().to_str().unwrap();
-    let task_access: HashSet<_> = data.config.users.get(login).unwrap().can_view_status.iter().map(|task|
+    let task_access: HashSet<_> = data.read().config.users.get(login).unwrap().can_view_status.iter().map(|task|
         task.clone()
     ).collect();
 
@@ -228,22 +225,9 @@ async fn sse(req: HttpRequest, data: web::Data<AppState>) -> HttpResponse {
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     let mut listenfd = ListenFd::from_env();
-
-    let config = cfg::Config::read("taru.yml"); 
-    let mut task_states = HashMap::new();
-    let mut id = 0usize;
-    let task_ids: Vec<String> = config.tasks.keys().map(String::from).collect();
-    for key in &task_ids {
-        task_states.insert(key.to_owned(), Arc::new(RwLock::new(task::TaskState::new(id, key))));
-        id += 1;
-    }
-
-    let data = AppState {
-        config: config.clone(),
-        task_ids,
-        tasks: task_states,
-        events: tokio::sync::broadcast::channel(16).0,
-    };
+    let data = AppState::new("taru.yml");
+    let signal_data = data.clone();
+    let config = data.read().config.clone();
 
     let mut server = HttpServer::new(move ||
         App::new().data(data.clone())
@@ -260,7 +244,7 @@ async fn main() -> std::io::Result<()> {
                     })
                 }
                 let login: String = req.get_session().get::<String>("login").unwrap().unwrap();
-                if !req.app_data::<AppState>().unwrap().config.users.contains_key(&login) {
+                if !req.app_data::<Arc<RwLock<AppState>>>().unwrap().read().config.users.contains_key(&login) {
                     return Box::pin(async {
                         Ok(req.into_response(
                             HttpResponse::Forbidden().finish()
@@ -278,6 +262,14 @@ async fn main() -> std::io::Result<()> {
             )
             .service(Files::new("/", "public").index_file("index.html"))
     );
+
+    tokio::spawn(async move {
+        let mut sighup = signal(SignalKind::hangup()).unwrap();
+        loop {
+            sighup.recv().await;
+            app_state::reload_config(&signal_data);
+        }
+    });
 
     server = if let Some(l) = listenfd.take_tcp_listener(0).unwrap() {
         server.listen(l)?

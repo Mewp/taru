@@ -21,6 +21,7 @@ pub enum TaskEvent {
     ExitStatus(Option<i32>),
     Stdout(Vec<u8>),
     Stderr(Vec<u8>),
+    UpdateConfig,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -40,7 +41,6 @@ impl TaskStatus {
 }
 
 pub struct TaskState {
-    pub id: usize,
     pub name: String,
     pub status: TaskStatus,
     pub current_lines: usize,
@@ -50,9 +50,8 @@ pub struct TaskState {
 }
 
 impl TaskState {
-    pub fn new(id: usize, name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>) -> Self {
         TaskState {
-            id,
             name: name.into(),
             status: TaskStatus::New,
             current_lines: 0,
@@ -64,7 +63,7 @@ impl TaskState {
 }
 
 // This ignores any send errors, because they just mean that there were no receivers
-fn send_message<T>(sender: &Sender<T>, message: T) {
+pub fn send_message<T>(sender: &Sender<T>, message: T) {
     match sender.send(message) { _ => () };
 }
 
