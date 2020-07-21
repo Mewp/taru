@@ -222,8 +222,17 @@ async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpRe
     HttpResponse::Ok().header("Content-Type", "text/event-stream").streaming(body)
 }
 
+// Import a geteuid syscall, so that we can get the effective user id without depending on a huge
+// library. This program won't run on anything other than linux anyway, so this should be safe.
+#[link(name="c")]
+extern "C" {
+    fn geteuid() -> u32;
+}
+
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
+    // systemctl won't know how to connect to the user instance unless this env var is set
+    std::env::set_var("XDG_RUNTIME_DIR", format!("/run/user/{}", unsafe { geteuid() }));
     let mut listenfd = ListenFd::from_env();
     let data = AppState::new("taru.yml");
     let signal_data = data.clone();
