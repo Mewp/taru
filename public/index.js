@@ -31,6 +31,7 @@ const TaskList = Vue.extend({
       this.sseOpened = false;
       this.eventSource = new EventSource('/api/v1/events', { withCredentials: true });
       this.eventSource.onmessage = (e) => {
+        this.sseOpened = true
         let data = JSON.parse(e.data)
         let task = this.tasks[data[0]]
         console.log(data, task)
@@ -40,9 +41,6 @@ const TaskList = Vue.extend({
           task.exit_code = data[1].Finished
           task.state = 'finished'
         }
-      }
-      this.eventSource.onopen = () => {
-        this.sseOpened = true
       }
       this.eventSource.onerror = (e) => {
         if(this.sseOpened) {
@@ -61,6 +59,8 @@ const TaskList = Vue.extend({
     }
 
     this.initSse()
+
+    // Because EventSource doesn't have an onclose method, we have to poll it.
     setInterval(() => {
       if(this.eventSource.readyState == EventSource.CLOSED) {
         if(this.sseOpened) {
@@ -104,7 +104,7 @@ Vue.component('task', {
         </a>
       </td>
       <td>
-        <span v-if="task.state == 'running'"><img src="/loading.svg"></span>
+        <span v-if="task.state == 'running'">Running...</span>
         <span v-if="task.state == 'finished' && task.exit_code !== null">Finished with exit code {{task.exit_code}}</span>
         <span v-if="task.state == 'finished' && task.exit_code === null">Stopped</span>
       </td>
