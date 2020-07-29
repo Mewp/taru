@@ -1,23 +1,31 @@
 @import url(https://fonts.googleapis.com/icon?family=Material+Icons);
 
-.task-run-button {
+.actions {
+    display: flex;
+}
+
+.btn {
     height: 32px;
     width: 32px;
     text-align: center;
     vertical-align: center;
-    background: #42A5F5;
+    color: #42A5F5;
 }
 
-.task-run-button button {
+.btn.btn-primary {
+    background: #42A5F5;
+    color: white;
+}
+
+.btn button {
     background: inherit;
     color: inherit;
     border: 0;
     padding: 0;
 }
 
-.task-run-button .material-icons {
+.btn .material-icons {
     line-height: 32px;
-    color: white;
     cursor: pointer;
 }
 
@@ -27,4 +35,17 @@ a {
 
 td {
     padding: 0 1ex;
+}
+
+.output {
+    font-family: monospace;
+    white-space: pre;
+    background: #1B1D1E;
+    color: #DDD;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: auto;
 }
