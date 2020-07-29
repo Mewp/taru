@@ -37,7 +37,7 @@ const TaskList = Vue.extend({
         if(data[1] == 'Started') {
           task.state = 'running'
         } else {
-          task.exit_code = data[1].ExitStatus
+          task.exit_code = data[1].Finished
           task.state = 'finished'
         }
       }

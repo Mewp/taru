@@ -1,12 +1,16 @@
-use actix_web::{web, App, HttpRequest, HttpServer, HttpResponse, get, post, Scope};
-use actix_web::http::{HeaderName, HeaderValue};
+use actix_web::{
+    web, App, HttpRequest, HttpServer, HttpResponse,
+    get, post, Scope, dev::{ServiceRequest, ServiceResponse},
+    error::Error as ActixError
+};
 use actix_files::Files;
 use listenfd::ListenFd;
 use futures::stream::{self, StreamExt};
-use futures::{future, FutureExt};
+use futures::{future, FutureExt, Future};
 use bytes::{Bytes, BytesMut, BufMut};
 use std::convert::Infallible;
 use std::collections::{HashMap, HashSet};
+use std::pin::Pin;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use actix_service::Service;
@@ -17,11 +21,13 @@ use serde::Serialize;
 use serde_json;
 
 mod cfg;
+mod event;
 mod task;
 mod app_state;
 
 use app_state::AppState;
-use task::TaskEvent;
+use task::TaskOutput;
+use event::{Event, send_message};
 
 #[derive(Debug, Serialize)]
 struct TaskData<'a> {
@@ -101,15 +107,15 @@ async fn stream_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>,
 
     let stream = receiver.into_stream().take_while(|result| future::ready(
         match result {
-            Ok(TaskEvent::ExitStatus(_)) => false,
+            Ok(TaskOutput::Finished(_)) => false,
             _ => true
         }
     )).filter_map(|result| async move {
         match result {
             Ok(event) => {
                 match event {
-                    TaskEvent::Stdout(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
-                    TaskEvent::Stderr(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
+                    TaskOutput::Stdout(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
+                    TaskOutput::Stderr(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
                     _ => None
                 }
             }
@@ -206,8 +212,12 @@ async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpRe
     let body = receiver.into_stream().scan(task_access, |task_access, result|
         match result {
             Ok(event) => {
-                if !task_access.contains(&event.0) {
-                    return future::ready(None)
+                match &event {
+                    Event::Started(name)
+                    | Event::Finished(name, _) => if !task_access.contains(name) {
+                        return future::ready(None)
+                    },
+                    _ => {}
                 }
                 let mut data = BytesMut::new();
                 data.put(&b"data: "[..]);
@@ -281,7 +291,7 @@ async fn main() -> std::io::Result<()> {
                 select!(
                     _ = sighup.recv() => { app_state::reload_config(&data); }
                     _ = time::delay_for(Duration::from_secs(heartbeat)) => {
-                        match data.read().events.send(("".to_owned(), TaskEvent::Ping)) { _ => () }
+                        send_message(&data.read().events, Event::Ping);
                     }
                 )
             } else {

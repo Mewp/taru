@@ -11,18 +11,17 @@ use serde::Serialize;
 use bytes::{BytesMut, BufMut};
 use tokio::process::Command as AsyncCommand;
 
+use crate::event::{Event, send_message};
+
 const TOKEN_STDOUT: Token = Token(0);
 const TOKEN_STDERR: Token = Token(1);
 const BUF_SIZE: usize = 102400;
 
 #[derive(Debug, Serialize, Clone)]
-pub enum TaskEvent {
-    Ping,
-    Started,
-    ExitStatus(Option<i32>),
+pub enum TaskOutput {
     Stdout(Vec<u8>),
     Stderr(Vec<u8>),
-    UpdateConfig,
+    Finished(Option<i32>)
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -47,7 +46,7 @@ pub struct TaskState {
     pub current_lines: usize,
     pub last_lines: usize,
     pub output: BytesMut,
-    pub events: Sender<TaskEvent>
+    pub events: Sender<TaskOutput>
 }
 
 impl TaskState {
@@ -63,12 +62,7 @@ impl TaskState {
     }
 }
 
-// This ignores any send errors, because they just mean that there were no receivers
-pub fn send_message<T>(sender: &Sender<T>, message: T) {
-    match sender.send(message) { _ => () };
-}
-
-pub fn spawn_task(global_events: Sender<(String, TaskEvent)>, state: Arc<RwLock<TaskState>>, cmd: &Vec<String>, buffer: bool) {
+pub fn spawn_task(global_events: Sender<Event>, state: Arc<RwLock<TaskState>>, cmd: &Vec<String>, buffer: bool) {
     let (mut reader_out, writer_out) = pipe().unwrap();
     let (mut reader_err, writer_err) = pipe().unwrap();
     let mut cmd_base = Command::new("systemd-run");
@@ -88,7 +82,7 @@ pub fn spawn_task(global_events: Sender<(String, TaskEvent)>, state: Arc<RwLock<
     let task_events = state.read().events.clone();
     std::thread::Builder::new().name(format!("task {}", task_id)).spawn(move || {
         state.write().status = TaskStatus::Running;
-        send_message(&global_events, (task_id.clone(), TaskEvent::Started));
+        send_message(&global_events, Event::Started(task_id.clone()));
         let mut closed = 0;
         while closed < 2 {
             poll.poll(&mut events, None).unwrap();
@@ -100,10 +94,10 @@ pub fn spawn_task(global_events: Sender<(String, TaskEvent)>, state: Arc<RwLock<
                         let mut buf: Vec<u8> = Vec::with_capacity(BUF_SIZE);
                         if token == TOKEN_STDOUT {
                             reader_out.read_to_end(&mut buf).unwrap();
-                            send_message(&task_events, TaskEvent::Stdout(buf[..].into()));
+                            send_message(&task_events, TaskOutput::Stdout(buf[..].into()));
                         } else {
                             reader_err.read_to_end(&mut buf).unwrap();
-                            send_message(&task_events, TaskEvent::Stderr(buf[..].into()));
+                            send_message(&task_events, TaskOutput::Stderr(buf[..].into()));
                         }
                         if buffer {
                             state.write().output.put(&buf[..]);
@@ -112,11 +106,11 @@ pub fn spawn_task(global_events: Sender<(String, TaskEvent)>, state: Arc<RwLock<
                 } else if event.is_readable() {
                     let res = if token == TOKEN_STDOUT {
                         let res = reader_out.read(&mut buf).unwrap();
-                        send_message(&task_events, TaskEvent::Stdout(buf[0..res].to_owned()));
+                        send_message(&task_events, TaskOutput::Stdout(buf[0..res].to_owned()));
                         res
                     } else {
                         let res = reader_err.read(&mut buf).unwrap();
-                        send_message(&task_events, TaskEvent::Stderr(buf[0..res].to_owned()));
+                        send_message(&task_events, TaskOutput::Stderr(buf[0..res].to_owned()));
                         res
                     };
 
@@ -128,8 +122,8 @@ pub fn spawn_task(global_events: Sender<(String, TaskEvent)>, state: Arc<RwLock<
         }
         let code = cmd.wait().expect("wait() failed").code();
         state.write().status = TaskStatus::Finished(code);
-        send_message(&task_events, TaskEvent::ExitStatus(code));
-        send_message(&global_events, (task_id.clone(), TaskEvent::ExitStatus(code)));
+        send_message(&task_events, TaskOutput::Finished(code));
+        send_message(&global_events, Event::Finished(task_id.clone(), code));
     }).unwrap();
 }
 

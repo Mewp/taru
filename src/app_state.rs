@@ -4,14 +4,15 @@ use std::collections::HashMap;
 use tokio::sync::broadcast;
 
 use crate::cfg::Config;
-use crate::task::{TaskState, TaskEvent, send_message};
+use crate::task::TaskState;
+use crate::event::{Event, send_message};
 
 #[derive(Clone)]
 pub struct AppState {
     config_path: String,
     pub config: Config,
     pub tasks: HashMap<String, Arc<RwLock<TaskState>>>,
-    pub events: tokio::sync::broadcast::Sender<(String, TaskEvent)>
+    pub events: tokio::sync::broadcast::Sender<Event>
 }
 
 impl AppState {
@@ -43,5 +44,5 @@ pub fn reload_config(app_state: &Arc<RwLock<AppState>>) {
             app_state.write().tasks.insert(task.to_owned(), Arc::new(RwLock::new(TaskState::new(task))));
         }
     }
-    send_message(&app_state.read().events, ("".to_owned(), TaskEvent::UpdateConfig));
+    send_message(&app_state.read().events, Event::UpdateConfig);
 }
