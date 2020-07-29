@@ -45,9 +45,6 @@ pub struct User {
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub tasks: HashMap<String, TaskConfig>,
-    pub auth: AuthConfig,
-    pub base_url: String,
-    pub cookie_key: String,
     pub users: HashMap<String, User>,
 }
 

@@ -1,5 +1,5 @@
 use actix_web::{web, App, HttpRequest, HttpServer, HttpResponse, get, post, Scope};
-use actix_web::http::{header, HeaderName, HeaderValue};
+use actix_web::http::{HeaderName, HeaderValue};
 use actix_files::Files;
 use listenfd::ListenFd;
 use futures::stream::{self, StreamExt};
@@ -10,14 +10,12 @@ use std::collections::{HashMap, HashSet};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use actix_service::Service;
-use actix_session::{CookieSession, UserSession};
 use tokio::signal::unix::{signal, SignalKind};
 use serde::Serialize;
 use serde_json;
 
 mod cfg;
 mod task;
-mod auth;
 mod app_state;
 
 use app_state::AppState;
@@ -236,35 +234,27 @@ async fn main() -> std::io::Result<()> {
     let mut listenfd = ListenFd::from_env();
     let data = AppState::new("taru.yml");
     let signal_data = data.clone();
-    let config = data.read().config.clone();
 
     let mut server = HttpServer::new(move ||
         App::new().data(data.clone())
-            .wrap_fn(|mut req, srv| {
-                if req.uri().path().starts_with("/auth") {
-                    return srv.call(req)
-                }
-                let logged_in: bool = req.get_session().get::<String>("login").unwrap().is_some();
-                if !logged_in {
-                    return Box::pin(async {
-                        Ok(req.into_response(
-                            HttpResponse::Found().header(header::LOCATION, "/auth/gitlab/login".to_string()).finish()
-                        ))
-                    })
-                }
-                let login: String = req.get_session().get::<String>("login").unwrap().unwrap();
-                if !req.app_data::<Arc<RwLock<AppState>>>().unwrap().read().config.users.contains_key(&login) {
-                    return Box::pin(async {
+            .wrap_fn(|req, srv| {
+                if let Some(Ok(login)) = req.headers().get("x-user").map(|h| h.to_str()) {
+                    if !req.app_data::<Arc<RwLock<AppState>>>().unwrap().read().config.users.contains_key(login) {
+                        return future::ready(
+                            Ok(req.into_response(
+                                HttpResponse::Forbidden().finish()
+                            ))
+                        ).boxed_local()
+                    }
+                    srv.call(req)
+                } else {
+                    future::ready(
                         Ok(req.into_response(
                             HttpResponse::Forbidden().finish()
                         ))
-                    })
+                    ).boxed_local()
                 }
-                req.headers_mut().insert(HeaderName::from_static("x-user"), HeaderValue::from_str(&login).unwrap());
-                srv.call(req)
             })
-            .wrap(CookieSession::signed(config.cookie_key.as_bytes()).secure(false))
-            .service(auth::scope(&config))
             .service(
                 Scope::new("/api/v1").service(sse).service(tasks)
                     .service(task_run).service(task_stream).service(task_run_stream).service(task_stop)
