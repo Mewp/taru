@@ -44,7 +44,9 @@ pub struct User {
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
+    #[serde(default)]
     pub tasks: HashMap<String, TaskConfig>,
+    #[serde(default)]
     pub users: HashMap<String, User>,
     pub heartbeat: Option<u64>,
 }

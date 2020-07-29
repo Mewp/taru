@@ -39,28 +39,51 @@ struct TaskData<'a> {
     can_view_output: bool
 }
 
-fn can_run_task(req: &HttpRequest) -> bool {
+fn get_view_status_tasks(req: &HttpRequest) -> HashSet<String> {
     let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
-    let login = req.headers().get("x-user").unwrap().to_str().unwrap();
+    let login = req.headers().get("x-user").map(|h| h.to_str().unwrap());
+    match login {
+        Some(login) => data.read().config.users.get(login).unwrap().can_view_status.iter().map(String::from).collect(),
+        None => data.read().config.tasks.keys().map(String::from).collect()
+    }
+}
+
+fn get_view_output_tasks(req: &HttpRequest) -> HashSet<String> {
+    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
+    let login = req.headers().get("x-user").map(|h| h.to_str().unwrap());
+    match login {
+        Some(login) => data.read().config.users.get(login).unwrap().can_view_output.iter().map(String::from).collect(),
+        None => data.read().config.tasks.keys().map(String::from).collect()
+    }
+}
+
+fn get_run_tasks(req: &HttpRequest) -> HashSet<String> {
+    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
+    let login = req.headers().get("x-user").map(|h| h.to_str().unwrap());
+    match login {
+        Some(login) => data.read().config.users.get(login).unwrap().can_run.iter().map(String::from).collect(),
+        None => data.read().config.tasks.keys().map(String::from).collect()
+    }
+}
+
+fn can_run_task(req: &HttpRequest) -> bool {
     let task = req.match_info().get("task").unwrap();
-    data.read().config.users.get(login).unwrap().can_run.iter().find(|t| *t == task).is_some()
+    get_run_tasks(req).iter().find(|t| *t == &task).is_some()
 }
 
 fn can_view_output(req: &HttpRequest) -> bool {
-    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
-    let login = req.headers().get("x-user").unwrap().to_str().unwrap();
     let task = req.match_info().get("task").unwrap();
-    data.read().config.users.get(login).unwrap().can_view_output.iter().find(|t| *t == task).is_some()
+    get_view_output_tasks(req).iter().find(|t| *t == &task).is_some()
 }
 
 #[get("/tasks")]
 async fn tasks(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
-    let login = req.headers().get("x-user").unwrap().to_str().unwrap();
     let data = data.read();
-    let can_run: HashSet<_> = data.config.users.get(login).unwrap().can_run.iter().collect();
-    let can_view_output: HashSet<_> = data.config.users.get(login).unwrap().can_view_output.iter().collect();
+    let can_run: HashSet<_> = get_run_tasks(&req);
+    let can_view_output: HashSet<_> = get_view_output_tasks(&req);
+    let tasks = get_view_status_tasks(&req);
     HttpResponse::Ok().json(
-        data.config.users.get(login).unwrap().can_view_status.iter().map(|name| {
+        tasks.iter().map(|name| {
             let task = data.tasks.get(name).unwrap().read();
             (name, TaskData {
                 name: name,
@@ -204,10 +227,7 @@ async fn task_stream(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, p
 #[get("/events")]
 async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     let receiver = data.read().events.subscribe();
-    let login = req.headers().get("x-user").unwrap().to_str().unwrap();
-    let task_access: HashSet<_> = data.read().config.users.get(login).unwrap().can_view_status.iter().map(|task|
-        task.clone()
-    ).collect();
+    let task_access: HashSet<_> = get_view_status_tasks(&req);
 
     let body = receiver.into_stream().scan(task_access, |task_access, result|
         match result {
