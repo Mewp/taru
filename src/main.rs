@@ -229,6 +229,14 @@ extern "C" {
     fn geteuid() -> u32;
 }
 
+fn forbidden(req: ServiceRequest) -> Pin<Box<dyn Future<Output = Result<ServiceResponse, ActixError>>>> {
+    future::ready(
+        Ok(req.into_response(
+            HttpResponse::Forbidden().finish()
+        ))
+    ).boxed_local()
+}
+
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     // systemctl won't know how to connect to the user instance unless this env var is set
@@ -240,21 +248,21 @@ async fn main() -> std::io::Result<()> {
     let mut server = HttpServer::new(move ||
         App::new().data(data.clone())
             .wrap_fn(|req, srv| {
+                if req.app_data::<Arc<RwLock<AppState>>>().unwrap().read().config.users.len() == 0 {
+                    // Turn off authorization if there are no users defined
+                    return srv.call(req)
+                }
+
+                // Otherwise, reject any unauthorized users.
                 if let Some(Ok(login)) = req.headers().get("x-user").map(|h| h.to_str()) {
                     if !req.app_data::<Arc<RwLock<AppState>>>().unwrap().read().config.users.contains_key(login) {
-                        return future::ready(
-                            Ok(req.into_response(
-                                HttpResponse::Forbidden().finish()
-                            ))
-                        ).boxed_local()
+                        // We don't know this user
+                        return forbidden(req)
                     }
                     srv.call(req)
                 } else {
-                    future::ready(
-                        Ok(req.into_response(
-                            HttpResponse::Forbidden().finish()
-                        ))
-                    ).boxed_local()
+                    // No X-User header has been set, or it was somehow incorrect.
+                    forbidden(req)
                 }
             })
             .service(
