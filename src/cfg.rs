@@ -46,6 +46,7 @@ pub struct User {
 pub struct Config {
     pub tasks: HashMap<String, TaskConfig>,
     pub users: HashMap<String, User>,
+    pub heartbeat: Option<u64>,
 }
 
 impl Config {

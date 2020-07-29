@@ -14,7 +14,7 @@ listenfd = "0.3"
 serde = "1.0"
 serde_yaml = "0.8"
 serde_json = "1"
-tokio = { version = "0.2", features = ["sync", "process", "io-util", "io-driver"] }
+tokio = { version = "0.2", features = ["sync", "process", "io-util", "io-driver", "macros"] }
 futures = "0.3"
 bytes = "0.5.5"
 anyhow = "1"

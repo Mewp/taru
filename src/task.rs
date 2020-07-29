@@ -17,6 +17,7 @@ const BUF_SIZE: usize = 102400;
 
 #[derive(Debug, Serialize, Clone)]
 pub enum TaskEvent {
+    Ping,
     Started,
     ExitStatus(Option<i32>),
     Stdout(Vec<u8>),

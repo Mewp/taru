@@ -3,7 +3,7 @@ use actix_web::http::{HeaderName, HeaderValue};
 use actix_files::Files;
 use listenfd::ListenFd;
 use futures::stream::{self, StreamExt};
-use futures::{future};
+use futures::{future, FutureExt};
 use bytes::{Bytes, BytesMut, BufMut};
 use std::convert::Infallible;
 use std::collections::{HashMap, HashSet};
@@ -11,6 +11,8 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use actix_service::Service;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::time::{self, Duration};
+use tokio::select;
 use serde::Serialize;
 use serde_json;
 
@@ -232,7 +234,7 @@ async fn main() -> std::io::Result<()> {
     // systemctl won't know how to connect to the user instance unless this env var is set
     std::env::set_var("XDG_RUNTIME_DIR", format!("/run/user/{}", unsafe { geteuid() }));
     let mut listenfd = ListenFd::from_env();
-    let data = AppState::new("taru.yml");
+    let data = AppState::new(std::env::args().collect::<Vec<_>>().get(1).expect("The first argument must be a path to the config file."));
     let signal_data = data.clone();
 
     let mut server = HttpServer::new(move ||
@@ -264,16 +266,27 @@ async fn main() -> std::io::Result<()> {
 
     tokio::spawn(async move {
         let mut sighup = signal(SignalKind::hangup()).unwrap();
+        let data = signal_data;
         loop {
-            sighup.recv().await;
-            app_state::reload_config(&signal_data);
+            let heartbeat = data.read().config.heartbeat.clone();
+            if let Some(heartbeat) = heartbeat {
+                select!(
+                    _ = sighup.recv() => { app_state::reload_config(&data); }
+                    _ = time::delay_for(Duration::from_secs(heartbeat)) => {
+                        match data.read().events.send(("".to_owned(), TaskEvent::Ping)) { _ => () }
+                    }
+                )
+            } else {
+                sighup.recv().await;
+                app_state::reload_config(&data);
+            }
         }
     });
 
     server = if let Some(l) = listenfd.take_tcp_listener(0).unwrap() {
         server.listen(l)?
     } else {
-        server.bind("127.0.0.1:3000")?
+        server.bind("0.0.0.0:3000")?
     };
 
     server.run().await
