@@ -7,7 +7,7 @@ use actix_files::Files;
 use listenfd::ListenFd;
 use futures::stream::{self, StreamExt};
 use futures::{future, FutureExt, Future};
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{Bytes, BytesMut};
 use std::convert::Infallible;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
@@ -227,7 +227,8 @@ async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpRe
     let receiver = data.read().events.subscribe();
     let task_access: HashSet<_> = get_view_status_tasks(&req);
 
-    let body = receiver.into_stream().scan(task_access, |task_access, result|
+    let first_ping = stream::once(future::ready(Ok::<_, Infallible>(Event::Ping.to_event())));
+    let stream = receiver.into_stream().scan(task_access, |task_access, result|
         match result {
             Ok(event) => {
                 match &event {
@@ -237,15 +238,12 @@ async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpRe
                     },
                     _ => {}
                 }
-                let mut data = BytesMut::new();
-                data.put(&b"data: "[..]);
-                data.put(serde_json::to_vec(&event).unwrap().as_slice());
-                data.put(&b"\n\n"[..]);
-                future::ready(Some(Ok::<_, Infallible>(Bytes::from(data))))
+                future::ready(Some(Ok::<_, Infallible>(event.to_event())))
             }
             Err(_) => future::ready(None)
         }
     );
+    let body = first_ping.chain(stream);
 
     HttpResponse::Ok().header("Content-Type", "text/event-stream").streaming(body)
 }

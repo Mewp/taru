@@ -8,13 +8,6 @@ async function fetchTasks() {
   }
 }
 
-function sortObject(obj) {
-    return Object.keys(obj).sort().reduce(function (result, key) {
-        result[key] = obj[key];
-        return result;
-    }, {});
-}
-
 const TaskList = Vue.extend({
   template: `<table class="task-list">
     <task v-for="(task, name) in tasks" ref="tasks" :task="task" :name="name" :key="name" />
@@ -30,18 +23,38 @@ const TaskList = Vue.extend({
     initSse() {
       this.sseOpened = false;
       this.eventSource = new EventSource('/api/v1/events', { withCredentials: true });
-      this.eventSource.onmessage = (e) => {
+
+      this.eventSource.addEventListener('ping', (e) => {
+        console.log('ping!')
         this.sseOpened = true
+      })
+
+      this.eventSource.addEventListener('started', (e) => {
         let data = JSON.parse(e.data)
-        let task = this.tasks[data[0]]
-        console.log(data, task)
-        if(data[1] == 'Started') {
-          task.state = 'running'
-        } else {
-          task.exit_code = data[1].Finished
-          task.state = 'finished'
+        this.tasks[data.task].state = 'running'
+      })
+
+      this.eventSource.addEventListener('finished', (e) => {
+        let data = JSON.parse(e.data)
+        let task = this.tasks[data.task]
+        task.state = 'finished'
+        task.exit_code = data.exit_code
+      })
+
+      this.eventSource.addEventListener('update_config', async () => {
+        console.log('update!')
+        let tasks = await (await fetch("/api/v1/tasks")).json()
+        for(let task of Object.keys(tasks).sort()) {
+          this.$set(this.tasks, task, tasks[task])
         }
-      }
+
+        for(let task in this.tasks) {
+          if(!tasks[task]) {
+            this.$delete(this.tasks, task)
+          }
+        }
+      })
+
       this.eventSource.onerror = (e) => {
         if(this.sseOpened) {
           this.initSse()
@@ -54,7 +67,7 @@ const TaskList = Vue.extend({
 
   async mounted() {
     let tasks = await (await fetch("/api/v1/tasks")).json()
-    for(task in sortObject(tasks)) {
+    for(let task of Object.keys(tasks).sort()) {
       this.$set(this.tasks, task, tasks[task])
     }
 
