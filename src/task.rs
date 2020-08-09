@@ -1,8 +1,8 @@
 use os_pipe::pipe;
 use mio::unix::SourceFd;
 use mio::{Events, Poll, Token, Interest};
-use std::io::Read;
-use std::os::unix::io::AsRawFd;
+use std::io::{Read, ErrorKind};
+use std::os::unix::io::{RawFd, AsRawFd};
 use std::process::{Command, Stdio, ExitStatus};
 use tokio::sync::broadcast::Sender;
 use parking_lot::RwLock;
@@ -12,10 +12,12 @@ use bytes::{BytesMut, BufMut};
 use tokio::process::Command as AsyncCommand;
 
 use crate::event::{Event, send_message};
+use crate::broadcast::BroadcastChannel;
+use libc::{fcntl, F_GETFL, F_SETFL, O_NONBLOCK};
 
 const TOKEN_STDOUT: Token = Token(0);
 const TOKEN_STDERR: Token = Token(1);
-const BUF_SIZE: usize = 102400;
+const BUF_SIZE: usize = 10240;
 
 #[derive(Debug, Serialize, Clone)]
 pub enum TaskOutput {
@@ -46,7 +48,7 @@ pub struct TaskState {
     pub current_lines: usize,
     pub last_lines: usize,
     pub output: BytesMut,
-    pub events: Sender<TaskOutput>
+    pub events: BroadcastChannel<TaskOutput>
 }
 
 impl TaskState {
@@ -57,73 +59,100 @@ impl TaskState {
             current_lines: 0,
             last_lines: 0,
             output: BytesMut::new(),
-            events: tokio::sync::broadcast::channel(16).0
+            events: BroadcastChannel::new(16)
         }
     }
 }
 
-pub fn spawn_task(global_events: Sender<Event>, state: Arc<RwLock<TaskState>>, cmd: &Vec<String>, buffer: bool) {
+fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
+    unsafe {
+        let flags = fcntl(fd, F_GETFL, 0);
+        if flags < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    Ok(())
+}
+
+pub async fn spawn_task(global_events: Sender<Event>, task: Arc<RwLock<TaskState>>, cmdline: &Vec<String>, buffer: bool) {
+    // This is a mio-based implementation of running a process asynchronously and capturing its
+    // stdout and stderr. Mio is used here directly because in order to preserve the order of
+    // wakeup events, we need to use one Poll for both streams.
     let (mut reader_out, writer_out) = pipe().unwrap();
     let (mut reader_err, writer_err) = pipe().unwrap();
-    let mut cmd_base = Command::new("systemd-run");
-    cmd_base.args(&["--user", "--quiet", "--scope", "--collect", &format!("--unit=taru-task-{}", state.read().name)]);
-    cmd_base.args(cmd);
-    cmd_base.stdin(Stdio::null());
-    cmd_base.stdout(writer_out);
-    cmd_base.stderr(writer_err);
+    let mut cmd = Command::new("systemd-run");
+    cmd.args(&["--user", "--quiet", "--scope", "--collect", &format!("--unit=taru-task-{}", task.read().name)]);
+    cmd.args(cmdline);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(writer_out);
+    cmd.stderr(writer_err);
     let mut poll = Poll::new().unwrap();
+    set_nonblocking(reader_out.as_raw_fd()).unwrap();
+    set_nonblocking(reader_err.as_raw_fd()).unwrap();
     poll.registry().register(&mut SourceFd(&reader_out.as_raw_fd()), TOKEN_STDOUT, Interest::READABLE).unwrap();
     poll.registry().register(&mut SourceFd(&reader_err.as_raw_fd()), TOKEN_STDERR, Interest::READABLE).unwrap();
     let mut events = Events::with_capacity(16);
-    let mut cmd = cmd_base.spawn().unwrap();
-    let mut buf = [0u8; BUF_SIZE];
-    drop(cmd_base);  // crucial to drop writing pipes
-    let task_id = state.read().name.clone();
-    let task_events = state.read().events.clone();
-    std::thread::Builder::new().name(format!("task {}", task_id)).spawn(move || {
-        state.write().status = TaskStatus::Running;
-        send_message(&global_events, Event::Started(task_id.clone()));
-        let mut closed = 0;
-        while closed < 2 {
-            poll.poll(&mut events, None).unwrap();
-            for event in events.iter() {
-                let token = event.token();
-                if event.is_read_closed() {
-                    closed += 1;
+    let mut child = cmd.spawn().unwrap();
+    let mut buf = Box::new([0u8; BUF_SIZE]);
+    drop(cmd);  // crucial to drop writing pipes
+    let task_name = task.read().name.clone();
+    let task_events = task.read().events.clone();
+    std::thread::Builder::new().name(format!("task {}", task_name)).spawn(move || {
+        // A new thread requires a new tokio runtime,
+        // and a new thread is required because mio is blocking.
+        // Now if I could have just added a new scheduler to tokio, it would have been easier.
+        let mut runtime = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        runtime.block_on(async move {
+            task.write().status = TaskStatus::Running;
+            send_message(&global_events, Event::Started(task_name.clone()));
+            let mut closed = 0u8;
+            while closed < 2 {
+                poll.poll(&mut events, None).unwrap();
+                for event in events.iter() {
+                    let token = event.token();
+                    if event.is_read_closed() {
+                        closed += 1;
+                    }
                     if event.is_readable() {
-                        let mut buf: Vec<u8> = Vec::with_capacity(BUF_SIZE);
                         if token == TOKEN_STDOUT {
-                            reader_out.read_to_end(&mut buf).unwrap();
-                            send_message(&task_events, TaskOutput::Stdout(buf[..].into()));
-                        } else {
-                            reader_err.read_to_end(&mut buf).unwrap();
-                            send_message(&task_events, TaskOutput::Stderr(buf[..].into()));
-                        }
-                        if buffer {
-                            state.write().output.put(&buf[..]);
-                        }
-                    };
-                } else if event.is_readable() {
-                    let res = if token == TOKEN_STDOUT {
-                        let res = reader_out.read(&mut buf).unwrap();
-                        send_message(&task_events, TaskOutput::Stdout(buf[0..res].to_owned()));
-                        res
-                    } else {
-                        let res = reader_err.read(&mut buf).unwrap();
-                        send_message(&task_events, TaskOutput::Stderr(buf[0..res].to_owned()));
-                        res
-                    };
+                            loop {
+                                let res = match reader_out.read(&mut buf[..]) {
+                                    Ok(0) => break,
+                                    Ok(res) => res,
+                                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                                    Err(e) => panic!(e)
+                                };
+                                task_events.send(TaskOutput::Stdout(buf[0..res].to_owned())).await;
 
-                    if buffer {
-                        state.write().output.put(&buf[0..res]);
+                                if buffer {
+                                    task.write().output.put(&buf[0..res]);
+                                }
+                            }
+                        } else {
+                            loop {
+                                let res = match reader_err.read(&mut buf[..]) {
+                                    Ok(0) => break,
+                                    Ok(res) => res,
+                                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                                    Err(e) => panic!(e)
+                                };
+                                task_events.send(TaskOutput::Stderr(buf[0..res].to_owned())).await;
+
+                                if buffer {
+                                    task.write().output.put(&buf[0..res]);
+                                }
+                            }
+                        };
                     }
                 }
             }
-        }
-        let code = cmd.wait().expect("wait() failed").code();
-        state.write().status = TaskStatus::Finished(code);
-        send_message(&task_events, TaskOutput::Finished(code));
-        send_message(&global_events, Event::Finished(task_id.clone(), code));
+            let code = child.wait().expect("wait() failed").code();
+            task.write().status = TaskStatus::Finished(code);
+            task_events.send(TaskOutput::Finished(code)).await;
+            send_message(&global_events, Event::Finished(task_name.clone(), code));
+        });
     }).unwrap();
 }
 

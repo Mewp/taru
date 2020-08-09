@@ -19,9 +19,11 @@ use tokio::time::{self, Duration};
 use tokio::select;
 use serde::Serialize;
 use serde_json;
+use libc::geteuid;
 
 mod cfg;
 mod event;
+mod broadcast;
 mod task;
 mod app_state;
 
@@ -108,13 +110,14 @@ async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, pa
     let events = data.read().events.clone();
     let data = data.read();
     let ref task = data.config.tasks.get(&params.0).unwrap();
-    let ref cmdline = task.command;
+    let cmdline = task.command.clone();
     let state = data.tasks.get(&params.0).unwrap().clone();
     if state.read().status == task::TaskStatus::Running {
         return Err(HttpResponse::Conflict().body("The task is already running. Refusing to run two instances in parallel."));
     }
     state.write().output = BytesMut::new();
-    task::spawn_task(events, state, cmdline, task.buffered);
+    let is_buffered = task.buffered;
+    tokio::spawn(async move { task::spawn_task(events, state, &cmdline, is_buffered).await });
 
     Ok(())
 }
@@ -126,23 +129,18 @@ async fn stream_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>,
 
     let data = data.read();
     let task = data.tasks.get(&params.0).unwrap().read();
-    let receiver = task.events.subscribe();
+    let receiver = task.events.subscribe().await;
 
-    let stream = receiver.into_stream().take_while(|result| future::ready(
-        match result {
-            Ok(TaskOutput::Finished(_)) => false,
+    let stream = receiver.take_while(|event| future::ready(
+        match event {
+            TaskOutput::Finished(_) => false,
             _ => true
         }
-    )).filter_map(|result| async move {
-        match result {
-            Ok(event) => {
-                match event {
-                    TaskOutput::Stdout(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
-                    TaskOutput::Stderr(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
-                    _ => None
-                }
-            }
-            Err(_) => None
+    )).filter_map(|event| async move {
+        match event {
+            TaskOutput::Stdout(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
+            TaskOutput::Stderr(data) => Some(Ok::<_, Infallible>(Bytes::from(data))),
+            _ => None
         }
     });
 
@@ -250,13 +248,6 @@ async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpRe
     );
 
     HttpResponse::Ok().header("Content-Type", "text/event-stream").streaming(body)
-}
-
-// Import a geteuid syscall, so that we can get the effective user id without depending on a huge
-// library. This program won't run on anything other than linux anyway, so this should be safe.
-#[link(name="c")]
-extern "C" {
-    fn geteuid() -> u32;
 }
 
 fn forbidden(req: ServiceRequest) -> Pin<Box<dyn Future<Output = Result<ServiceResponse, ActixError>>>> {
