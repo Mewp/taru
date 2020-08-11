@@ -268,7 +268,7 @@ async fn main() -> std::io::Result<()> {
         App::new().data(data.clone())
             .wrap_fn(|req, srv| {
                 if req.app_data::<Arc<RwLock<AppState>>>().unwrap().read().config.users.len() == 0 {
-                    // Turn off authorization if there are no users defined
+                    // Disable authorization if there are no users defined
                     return srv.call(req)
                 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "taru"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Mewp <git@mewp.pl>"]
 edition = "2018"
 
@@ -22,9 +22,7 @@ thiserror = "1"
 mio = { version = "0.7", features = ["os-poll", "os-util"] }
 os_pipe = "0.9"
 parking_lot = "0.11"
-oauth2 = { version = "3.0", features = ["futures-03", "reqwest-010"], default-features = false }
-reqwest = "0.10"
 libc = "0.2"
 
 [profile.release]
-#lto = true
+lto = true
