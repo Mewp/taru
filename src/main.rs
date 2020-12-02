@@ -20,6 +20,7 @@ use tokio::select;
 use serde::Serialize;
 use serde_json;
 use libc::geteuid;
+use paste::paste;
 
 mod cfg;
 mod event;
@@ -35,48 +36,38 @@ use event::{Event, send_message};
 struct TaskData<'a> {
     name: &'a str,
     meta: &'a serde_json::Value,
+    data: HashMap<String, String>,
     state: &'static str,
     exit_code: Option<i32>,
     can_run: bool,
     can_view_output: bool
 }
 
-fn get_view_status_tasks(req: &HttpRequest) -> HashSet<String> {
-    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
-    let login = req.headers().get("x-user").map(|h| h.to_str().unwrap());
-    match login {
-        Some(login) => data.read().config.users.get(login).unwrap().can_view_status.iter().map(String::from).collect(),
-        None => data.read().config.tasks.keys().map(String::from).collect()
+macro_rules! generate_perm_checks {
+    ($name:ident) => {
+        paste! {
+            fn [<get_ $name _tasks>](req: &HttpRequest) -> HashSet<String> {
+                let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
+                let login = req.headers().get("x-user").map(|h| h.to_str().unwrap());
+                match login {
+                    Some(login) => data.read().config.users.get(login).unwrap().[<can_ $name>].iter().map(String::from).collect(),
+                    None => data.read().config.tasks.keys().map(String::from).collect()
+                }
+            }
+
+            #[allow(dead_code)]
+            fn [<can_ $name>](req: &HttpRequest) -> bool {
+                let task = req.match_info().get("task").unwrap();
+                [<get_ $name _tasks>](req).iter().find(|t| *t == &task).is_some()
+            }
+        }
     }
 }
 
-fn get_view_output_tasks(req: &HttpRequest) -> HashSet<String> {
-    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
-    let login = req.headers().get("x-user").map(|h| h.to_str().unwrap());
-    match login {
-        Some(login) => data.read().config.users.get(login).unwrap().can_view_output.iter().map(String::from).collect(),
-        None => data.read().config.tasks.keys().map(String::from).collect()
-    }
-}
-
-fn get_run_tasks(req: &HttpRequest) -> HashSet<String> {
-    let data: &web::Data<Arc<RwLock<AppState>>> = req.app_data().unwrap();
-    let login = req.headers().get("x-user").map(|h| h.to_str().unwrap());
-    match login {
-        Some(login) => data.read().config.users.get(login).unwrap().can_run.iter().map(String::from).collect(),
-        None => data.read().config.tasks.keys().map(String::from).collect()
-    }
-}
-
-fn can_run_task(req: &HttpRequest) -> bool {
-    let task = req.match_info().get("task").unwrap();
-    get_run_tasks(req).iter().find(|t| *t == &task).is_some()
-}
-
-fn can_view_output(req: &HttpRequest) -> bool {
-    let task = req.match_info().get("task").unwrap();
-    get_view_output_tasks(req).iter().find(|t| *t == &task).is_some()
-}
+generate_perm_checks!(view_status);
+generate_perm_checks!(view_output);
+generate_perm_checks!(run);
+generate_perm_checks!(change_data);
 
 #[get("/tasks")]
 async fn tasks(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
@@ -90,6 +81,7 @@ async fn tasks(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> Http
             (name, TaskData {
                 name: name,
                 meta: &data.config.tasks[name].meta,
+                data: task.data.clone(),
                 state: match task.status {
                     task::TaskStatus::New => "new",
                     task::TaskStatus::Running => "running",
@@ -104,7 +96,7 @@ async fn tasks(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> Http
 }
 
 async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, params: &web::Path<(String,)>) -> Result<(), HttpResponse> {
-    if !can_run_task(&req) {
+    if !can_run(&req) {
         return Err(HttpResponse::NotFound().finish())
     }
     let events = data.read().events.clone();
@@ -151,7 +143,7 @@ async fn stream_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>,
         resp.set_header(name, value.as_str());
     }
 
-    if print_output {
+    if print_output && data.config.tasks.get(&params.0).unwrap().buffered {
         let body = stream::once(future::ready(
             Ok::<_, Infallible>(Bytes::from(task.output.clone()))
         )).chain(stream);
@@ -187,7 +179,7 @@ async fn task_run(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, para
 
 #[post("/task/{task}/stop")]
 async fn task_stop(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>) -> HttpResponse {
-    if !can_run_task(&req) {
+    if !can_run(&req) {
         return HttpResponse::NotFound().finish()
     }
 
@@ -216,10 +208,30 @@ async fn task_stream(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, p
         for (name, value) in &data_read.config.tasks.get(&params.0).unwrap().headers {
             resp.set_header(name, value.as_str());
         }
-        
+
         return resp.body(task.output.clone())
     }
     stream_task(&req, &data, &params, true).await.unwrap_or_else(|e| e)
+}
+
+#[post("/task/{task}/data/{name}")]
+async fn task_change_data(req: HttpRequest, mut body: web::Payload, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String, String)>) -> actix_web::Result<HttpResponse> {
+    if !can_change_data(&req) {
+        return Ok(HttpResponse::NotFound().finish())
+    }
+
+    let mut bytes = web::BytesMut::new();
+    while let Some(item) = body.next().await {
+        bytes.extend_from_slice(&item?);
+    }
+    
+    let data_read = data.read();
+    let mut task = data_read.tasks.get(&params.0).unwrap().write();
+    let value = String::from_utf8_lossy(&bytes).into_owned();
+    task.data.insert(params.1.clone(), value.clone());
+    send_message(&data_read.events, Event::TaskData(task.name.clone(), params.1.clone(), value));
+
+    Ok(HttpResponse::Ok().body("Ok"))
 }
 
 #[get("/events")]
@@ -287,6 +299,7 @@ async fn main() -> std::io::Result<()> {
             .service(
                 Scope::new("/api/v1").service(sse).service(tasks)
                     .service(task_run).service(task_stream).service(task_run_stream).service(task_stop)
+                    .service(task_change_data)
             )
             .service(Files::new("/", "public").index_file("index.html"))
     );

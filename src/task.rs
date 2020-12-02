@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use os_pipe::pipe;
 use mio::unix::SourceFd;
 use mio::{Events, Poll, Token, Interest};
@@ -48,7 +49,8 @@ pub struct TaskState {
     pub current_lines: usize,
     pub last_lines: usize,
     pub output: BytesMut,
-    pub events: BroadcastChannel<TaskOutput>
+    pub events: BroadcastChannel<TaskOutput>,
+    pub data: HashMap<String, String>
 }
 
 impl TaskState {
@@ -59,7 +61,8 @@ impl TaskState {
             current_lines: 0,
             last_lines: 0,
             output: BytesMut::new(),
-            events: BroadcastChannel::new(16)
+            events: BroadcastChannel::new(16),
+            data: HashMap::new()
         }
     }
 }

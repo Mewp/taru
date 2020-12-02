@@ -37,9 +37,14 @@ pub struct TaskConfig {
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct User {
+    #[serde(default)]
     pub can_run: Vec<String>,
+    #[serde(default)]
     pub can_view_output: Vec<String>,
+    #[serde(default)]
     pub can_view_status: Vec<String>,
+    #[serde(default)]
+    pub can_change_data: Vec<String>,
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]

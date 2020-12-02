@@ -55,6 +55,12 @@ const TaskList = Vue.extend({
         }
       })
 
+      this.eventSource.addEventListener('change_data', () => {
+        let data = JSON.parse(e.data)
+        let task = this.tasks[data[0]]
+        task.data[data[1]] = data[2]
+      })
+
       this.eventSource.onerror = (e) => {
         if(this.sseOpened) {
           this.initSse()
@@ -120,13 +126,16 @@ Vue.component('task', {
         <span v-if="task.state == 'running'">Running...</span>
         <span v-if="task.state == 'finished' && task.exit_code !== null">Finished with exit code {{task.exit_code}}</span>
         <span v-if="task.state == 'finished' && task.exit_code === null">Stopped</span>
+        <span>{{since}}</span>
       </td>
     </tr>
   `,
   props: ['name', 'task'],
   data() {
     return {
-      output_shown: false
+      output_shown: false,
+      since: null,
+      interval: null,
     }
   },
 

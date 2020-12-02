@@ -8,6 +8,7 @@ pub enum Event {
     Ping,
     Started(String),
     Finished(String, Option<i32>),
+    TaskData(String, String, String),
     UpdateConfig,
 }
 
@@ -17,6 +18,7 @@ impl Event {
             Self::Ping => "ping",
             Self::Started(_) => "started",
             Self::Finished(_, _) => "finished",
+            Self::TaskData(_, _, _) => "task_data",
             Self::UpdateConfig => "update_config"
         }
     }
