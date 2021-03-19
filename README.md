@@ -122,10 +122,22 @@ Returns `404 Not found` if the task doesn't exist or you're not allowed to view 
 
 POST /api/v1/task/TASK/output
 -----------------------------
-Starts a task and return (stream) its output. Requires both `can_run` and `can_view_output` permissions.
+Starts a task and returns (streams) its output. Requires both `can_run` and `can_view_output` permissions.
 
 This endpoint combines the above two in one call to avoid race conditions with unbuffered tasks.
 If you run an unbuffered task, then attempt to get its output in a separate requests, you won't get the data outputted before the GET request, so just use this one.
+
+GET /api/v1/task/TASK/status
+-----------------------------
+Waits for a task to complete, then returns the exit code in the response body.
+
+For your convenience, if you add `?check=true` to the url and the exit code is not zero, it will return http status code 520.
+
+POST /api/v1/task/TASK/status
+-----------------------------
+Starts a task, waits for it to complete, then returns the exit code in the response body.
+
+For your convenience, if you add `?check=true` to the url and the exit code is not zero, it will return http status code 520.
 
 POST /api/v1/task/TASK/stop
 ---------------------------
@@ -137,7 +149,7 @@ A [server-sent events][sse] endpoint. Yields events in a `["task_name", EVENT]` 
 
   * `"Started"` – The task was just started.
   * `{"ExitStatus": 5}` – The task has finished (with a status code, unless killed in which case it will be `null`).
-  * `"UpdateConfig"` – Taru has reloaded it's configuration, refresh your task list.
+  * `"UpdateConfig"` – Taru has reloaded its configuration, refresh your task list.
 
   [sse]: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 

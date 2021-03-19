@@ -3,6 +3,8 @@ use actix_web::{
     get, post, Scope, dev::{ServiceRequest, ServiceResponse},
     error::Error as ActixError
 };
+use serde::Deserialize;
+use http::StatusCode;
 use actix_files::Files;
 use listenfd::ListenFd;
 use futures::stream::{self, StreamExt};
@@ -154,6 +156,40 @@ async fn stream_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>,
     }
 }
 
+#[derive(Deserialize)]
+struct WaitForStatus {
+    #[serde(default)]
+    check: bool
+}
+
+async fn wait_for_status(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, params: &web::Path<(String,)>, query: &web::Query<WaitForStatus>) -> Result<HttpResponse, HttpResponse> {
+    if !can_view_output(&req) {
+        return Err(HttpResponse::NotFound().finish())
+    }
+
+    let mut receiver = {
+        let data = data.read();
+        let task = data.tasks.get(&params.0).unwrap().read();
+        task.events.subscribe().await
+    };
+
+    while let Some(msg) = receiver.next().await {
+        println!("{:?}", msg);
+        if let TaskOutput::Finished(code) = msg {
+            let code = code.unwrap_or(-1);
+            let mut resp = HttpResponse::build(StatusCode::from_u16(520).unwrap());
+            resp.header("content-type", "text/plain; charset=utf-8");
+            resp.header("x-content-type-options", "nosniff");
+            if !query.check || code == 0 {
+                resp.status(StatusCode::OK);
+            }
+            return Ok(resp.body(format!("{}", code)));
+        }
+    }
+
+    return Ok(HttpResponse::InternalServerError().body("The task has ended, but hasn't notified me. This is a bug."));
+}
+
 #[post("/task/{task}/output")]
 async fn task_run_stream(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>) -> HttpResponse {
     let stream = match stream_task(&req, &data, &params, false).await {
@@ -175,6 +211,43 @@ async fn task_run(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, para
     }
 
     Ok(HttpResponse::Ok().body("Ok"))
+}
+
+#[get("/task/{task}/status")]
+async fn task_wait(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>, query: web::Query<WaitForStatus>) -> Result<HttpResponse, HttpResponse> {
+    if !can_view_status(&req) {
+        return Ok(HttpResponse::NotFound().finish())
+    }
+
+    let status = data.read().tasks.get(&params.0).unwrap().read().status.clone();
+    match status {
+        task::TaskStatus::New => Ok(HttpResponse::NoContent().finish()),
+        task::TaskStatus::Running => wait_for_status(&req, &data, &params, &query).await,
+        task::TaskStatus::Finished(code) => {
+            let code = code.unwrap_or(-1);
+            let mut resp = HttpResponse::build(StatusCode::from_u16(520).unwrap());
+            resp.header("content-type", "text/plain; charset=utf-8");
+            resp.header("x-content-type-options", "nosniff");
+            if !query.check || code == 0 {
+                resp.status(StatusCode::OK);
+            }
+            return Ok(resp.body(format!("{}", code)));
+        }
+    }
+}
+
+#[post("/task/{task}/status")]
+async fn task_run_wait(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>, params: web::Path<(String,)>, query: web::Query<WaitForStatus>) -> Result<HttpResponse, HttpResponse> {
+    if !can_view_status(&req) {
+        return Ok(HttpResponse::NotFound().finish())
+    }
+
+
+    if let Err(response) = run_task(&req, &data, &params).await {
+        return Ok(response)
+    }
+
+    wait_for_status(&req, &data, &params, &query).await
 }
 
 #[post("/task/{task}/stop")]
@@ -299,7 +372,7 @@ async fn main() -> std::io::Result<()> {
             .service(
                 Scope::new("/api/v1").service(sse).service(tasks)
                     .service(task_run).service(task_stream).service(task_run_stream).service(task_stop)
-                    .service(task_change_data)
+                    .service(task_change_data).service(task_run_wait).service(task_wait)
             )
             .service(Files::new("/", "public").index_file("index.html"))
     );
