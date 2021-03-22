@@ -6,12 +6,52 @@
         <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11" integrity="sha384-OZmxTjkv7EQo5XDMPAmIkkvywVeXw59YyYh6zq8UKfkbor13jS+5p8qMTBSA1q+F" crossorigin="anonymous"></script>
         <script src="https://cdn.jsdelivr.net/npm/vue-router@3.3.4" integrity="sha384-5ysQLF+E+9b/+wTnlloO2ONS/4Hy5q6LeqxMyyGo9thRvTM1fuX3HjtghzRbHORv" crossorigin="anonymous"></script>
         <script src="https://cdn.jsdelivr.net/npm/luxon@1.25.0/build/global/luxon.min.js" integrity="sha384-D3h8dHOchE4dpiSVF7wlFB9zw6Zq36WzHs85BgdKSSzLi7iamPNts7BGXd1qmz3y" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/vue-select@3.11.2/dist/vue-select.min.js" integrity="sha384-+DuwySt9/V4X8jnNrpdUumsBUBmj2yMfKCQbJdH2Zkdddy72uzvNwaNXZ+8k2R/B" crossorigin="anonymous"></script>
         <link rel="stylesheet" href="/style.css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vue-select@3.11.2/dist/vue-select.css" integrity="sha256-UOIZG7xYf0GO+FyQ44Mg1IMCo/2Y5T5ar2OooAanClQ=" crossorigin="anonymous">
     </head>
     <body>
         <div id="app">
             <router-view />
         </div>
+        <script type="application/x-template" id="task-template">
+            <tr>
+              <td>
+                <span>{{task.meta?.description || name}}</span>
+              </td>
+              <td class="actions">
+                <div class="btn btn-primary" v-if="task.can_run">
+                  <form v-if="task.meta?.download" method="POST" v-bind:action="'/api/v1/task/' + task.name + '/output'">
+                    <button v-unless="task.state == 'running'"><i class="material-icons">cloud_download</i></button>
+                  </form>
+                  <i v-else-if="task.state == 'running'" v-on:click="stop" class="material-icons">stop</i>
+                  <i v-else v-on:click="run" class="material-icons">play_arrow</i>
+                </div>
+                <router-link
+                  :to="'/task/' + task.name + '/output'"
+                  class="btn"
+                  v-if="task.can_view_output && !task.meta?.download"
+                  title="Show output"><i class="material-icons">search</i>
+                </router-link>
+                <a :href="'/api/v1/task/' + task.name + '/output'"
+                   class="btn"
+                   v-if="task.can_view_output && !task.meta?.download" title="Get raw output">
+                    <i class="material-icons">code</i>
+                </a>
+              </td>
+              <td>
+                  <div v-for="arg in task.arguments" style="white-space: nowrap">
+                    <span>{{arg.name}}:</span> <vue-select v-if="arg.datatype == 'Enum'" v-model="args[arg.name]" :options="arg_values[arg.enum_source]" :clearable="false">
+                  </div>
+              </td>
+              <td>
+                <span v-if="task.state == 'running'">Running...</span>
+                <span v-if="task.state == 'finished' && task.exit_code !== null">Finished with exit code {{task.exit_code}}</span>
+                <span v-if="task.state == 'finished' && task.exit_code === null">Stopped</span>
+                <span>{{since}}</span>
+              </td>
+            </tr>
+        </script>
         <script type="application/javascript" src="index.js"></script>
     </body>
 </html>

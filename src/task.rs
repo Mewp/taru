@@ -41,6 +41,13 @@ impl TaskStatus {
         }
         None
     }
+
+    pub fn is_finished(&self) -> bool {
+        match self {
+            TaskStatus::Finished(_) => true,
+            _ => false
+        }
+    }
 }
 
 pub struct TaskState {

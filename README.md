@@ -30,7 +30,7 @@ Taru exposes its API under `/api`—if you don't want the web interface, all you
 
     taru /etc/taru.yml
 
-Taru is first and foremost an API. This repo contains a simple web interface you can use with it. To make things easier, if you have a `public` directory in the working directory of Taru, it will serve it under `/`. This is a completely static website, however, so you can server it with another http server just as well. It makes an assumption however, that the Taru's api is available at `/api/v1`.
+Taru is first and foremost an API. This repo contains a simple web interface you can use with it. To make things easier, if you have a `public` directory in the working directory of Taru, it will serve it under `/`. This is a completely static website, however, so you can serve it with another http server just as well. It makes an assumption however, that the Taru's api is available at `/api/v1`.
 
 Requirements
 ============
@@ -43,9 +43,15 @@ Create a file named `taru.yml` in the working directory of the application (i.e.
     heartbeat: 1
     tasks:
       ping:
-        command: [ping, -c10, mewp.pl]
+        command: [ping, -c10, $host]
         meta:
           description: Ping a host
+        arguments:
+        - name: host
+          datatype: Enum
+          enum_source: hosts
+      hosts:
+        command: [cat, some_host_list]
       download_database:
         command: [pg_dump, some, args]
         buffered: false
@@ -68,7 +74,7 @@ The value is the interval between pings in seconds.
 
 Configure this if your users experience event stream disconnections. Also note that this doesn't affect output streams.
 
-tasks
+Tasks
 -----
 Each task has a name (the key, e.g. `download_database` in the example above), and the following fields:
 
@@ -76,6 +82,20 @@ Each task has a name (the key, e.g. `download_database` in the example above), a
   * **buffered** – whether to store the output in memory. default: true
   * **headers** – HTTP headers to send with the output
   * **meta** – arbitrary key-value pairs, the bundled web interface uses `desription` for human-readable task descriptions, and `download` to decide whether to download the output immediately when starting the task.
+
+Arguments
+---------
+Tasks can be parametrizd using a list of arguments. Each argument has to specify its `name` and `datatype`. Available datatypes are `Int`, `String`, and `Enum`.
+Please note that using Strings, while possible, can lead to undesirable consequences. Be wary of allowing arbitrary data in parameters. Ints have to be valid 32-bit signed numbers.
+Enums take the output from another task, split it by lines, and permit only values being identical to one of the lines. `enum_source` specified the task whose output will be read.
+
+Taru does not run `enum_sources` automatically. You have to first run it at least once, so that an output is available, in order to run a task that requires it. Taru will, however, tell you that the data is not ready if you don't do so.
+
+In order to use an arguments value, pass `$ARG` as a parameter in cmdline, where ARG is the argument's name. Note that undefined values of ARG will simply be ignored and passed to cmdline without substitution.
+
+In other words, if you have one argument, and it's called `host`, with a value of `example`, and a cmdline `[echo, $host, $asdf]`, the cmdline that will be called is `echo example $asdf`.
+
+All endpoints that run tasks accept arguments as either parameters in the url query, or in a request body (in the same format), e.g. `POST /api/v1/task/ping?host=example.org`.
 
 Users
 -----

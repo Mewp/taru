@@ -25,6 +25,24 @@ pub fn default_meta() -> serde_json::Value {
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
+pub enum ArgumentType {
+    Enum,
+    Int,
+    String
+}
+
+impl Default for ArgumentType {
+    fn default() -> Self { ArgumentType::Enum }
+}
+
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
+pub struct Argument {
+    pub name: String,
+    pub datatype: ArgumentType,
+    pub enum_source: Option<String>,
+}
+
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub struct TaskConfig {
     pub command: Vec<String>,
     #[serde(default="default_buffered")]
@@ -33,6 +51,8 @@ pub struct TaskConfig {
     pub meta: serde_json::Value,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(default)]
+    pub arguments: Vec<Argument>
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]

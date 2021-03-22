@@ -1,7 +1,7 @@
 use actix_web::{
     web, App, HttpRequest, HttpServer, HttpResponse,
     get, post, Scope, dev::{ServiceRequest, ServiceResponse},
-    error::Error as ActixError
+    error::Error as ActixError, FromRequest
 };
 use serde::Deserialize;
 use http::StatusCode;
@@ -39,6 +39,7 @@ struct TaskData<'a> {
     name: &'a str,
     meta: &'a serde_json::Value,
     data: HashMap<String, String>,
+    arguments: &'a Vec<cfg::Argument>,
     state: &'static str,
     exit_code: Option<i32>,
     can_run: bool,
@@ -89,6 +90,7 @@ async fn tasks(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> Http
                     task::TaskStatus::Running => "running",
                     task::TaskStatus::Finished(_) => "finished"
                 },
+                arguments: &data.config.tasks[name].arguments,
                 exit_code: task.status.as_finished(),
                 can_run: can_run.contains(name),
                 can_view_output: can_view_output.contains(name)
@@ -104,11 +106,51 @@ async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, pa
     let events = data.read().events.clone();
     let data = data.read();
     let ref task = data.config.tasks.get(&params.0).unwrap();
-    let cmdline = task.command.clone();
     let state = data.tasks.get(&params.0).unwrap().clone();
     if state.read().status == task::TaskStatus::Running {
         return Err(HttpResponse::Conflict().body("The task is already running. Refusing to run two instances in parallel."));
     }
+    let mut args = HashMap::new();
+    let params = web::Query::<HashMap<String, String>>::extract(req).await.unwrap().into_inner();
+    let post = if let Ok(payload) = web::Form::<HashMap<String, String>>::extract(req).await {
+        payload.into_inner()
+    } else { HashMap::new() };
+    for arg in &task.arguments {
+        if let Some(value) = params.get(&arg.name).or(post.get(&arg.name)) {
+            if arg.datatype == cfg::ArgumentType::Int && value.parse::<i32>().is_err() {
+                return Err(HttpResponse::BadRequest().body(format!("Argument {} has to be a number, but is `{}` instead.", arg.name, value)));
+            }
+            if arg.datatype == cfg::ArgumentType::Enum {
+                if let Some(ref enum_source) = arg.enum_source {
+                    let state = data.tasks.get(enum_source).unwrap().clone();
+                    if !state.read().status.is_finished() {
+                        return Err(HttpResponse::BadRequest().body(format!("Data source of argument {} is not ready yet.", arg.name)));
+                    }
+                    if value.len() == 0 {
+                        return Err(HttpResponse::BadRequest().body(format!("Empty value for argument {}", arg.name)));
+                    }
+                    let output: &[u8] = &*state.read().output;
+                    if output.split(|byte| *byte == b'\n').find(|val| *val == value.as_bytes()).is_none() {
+                        return Err(HttpResponse::BadRequest().body(format!("Argument {} has an invalid value.", arg.name)));
+                    }
+                } else {
+                    return Err(HttpResponse::InternalServerError().body(format!("Argument {} is an enum without a data source, please fix its configuration.", arg.name)));
+                }
+            }
+            args.insert(arg.name.clone(), value.clone());
+        } else {
+            return Err(HttpResponse::BadRequest().body(format!("Missing argument {}", arg.name)));
+        }
+    }
+
+    let cmdline = task.command.iter().map(|segment|
+        if segment.starts_with("$") && args.contains_key(&segment[1..]) {
+            args.get(&segment[1..]).unwrap().clone()
+        } else {
+            segment.clone()
+        }
+    ).collect();
+
     state.write().output = BytesMut::new();
     let is_buffered = task.buffered;
     tokio::spawn(async move { task::spawn_task(events, state, &cmdline, is_buffered).await });

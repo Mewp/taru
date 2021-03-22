@@ -49,3 +49,7 @@ td {
     bottom: 0;
     overflow: auto;
 }
+
+td div.v-select {
+    display: inline-block;
+}

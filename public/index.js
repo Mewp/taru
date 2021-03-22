@@ -25,7 +25,6 @@ const TaskList = Vue.extend({
       this.eventSource = new EventSource('/api/v1/events', { withCredentials: true });
 
       this.eventSource.addEventListener('ping', (e) => {
-        console.log('ping!')
         this.sseOpened = true
       })
 
@@ -42,7 +41,6 @@ const TaskList = Vue.extend({
       })
 
       this.eventSource.addEventListener('update_config', async () => {
-        console.log('update!')
         let tasks = await (await fetch("/api/v1/tasks")).json()
         for(let task of Object.keys(tasks).sort()) {
           this.$set(this.tasks, task, tasks[task])
@@ -73,6 +71,7 @@ const TaskList = Vue.extend({
 
   async mounted() {
     let tasks = await (await fetch("/api/v1/tasks")).json()
+    this.tasks = this.$root.$data.tasks;
     for(let task of Object.keys(tasks).sort()) {
       this.$set(this.tasks, task, tasks[task])
     }
@@ -97,57 +96,52 @@ const TaskList = Vue.extend({
 })
 
 Vue.component('task', {
-  template: `
-    <tr>
-      <td>
-        <span>{{task.meta?.description || name}}</span>
-      </td>
-      <td class="actions">
-        <div class="btn btn-primary" v-if="task.can_run">
-          <form v-if="task.meta?.download" method="POST" v-bind:action="'/api/v1/task/' + task.name + '/output'">
-            <button v-unless="task.state == 'running'"><i class="material-icons">cloud_download</i></button>
-          </form>
-          <i v-else-if="task.state == 'running'" v-on:click="stop" class="material-icons">stop</i>
-          <i v-else v-on:click="run" class="material-icons">play_arrow</i>
-        </div>
-        <router-link
-          :to="'/task/' + task.name + '/output'"
-          class="btn"
-          v-if="task.can_view_output && !task.meta?.download"
-          title="Show output"><i class="material-icons">search</i>
-        </router-link>
-        <a :href="'/api/v1/task/' + task.name + '/output'"
-           class="btn"
-           v-if="task.can_view_output && !task.meta?.download" title="Get raw output">
-            <i class="material-icons">code</i>
-        </a>
-      </td>
-      <td>
-        <span v-if="task.state == 'running'">Running...</span>
-        <span v-if="task.state == 'finished' && task.exit_code !== null">Finished with exit code {{task.exit_code}}</span>
-        <span v-if="task.state == 'finished' && task.exit_code === null">Stopped</span>
-        <span>{{since}}</span>
-      </td>
-    </tr>
-  `,
+  template: '#task-template',
   props: ['name', 'task'],
   data() {
     return {
+      args: {},
       output_shown: false,
       since: null,
       interval: null,
     }
   },
 
-  mounted() {
+  async mounted() {
     if(window.location.hash == `#task/${this.name}/output`) {
       this.output_shown = true
+    }
+
+    for(let arg of this.task.arguments) {
+      if(!this.$root.$data.task_outputs[arg.enum_source].length) {
+        let resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'})
+        let data = await resp.text()
+        data = data.trim().split("\n");
+        this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
+      }
+      this.$set(this.args, arg.name, this.$root.$data.task_outputs[arg.enum_source][0]);
+    }
+  },
+
+  computed: {
+    arg_values() {
+      for(let arg of this.task.arguments) {
+        if(!this.$root.$data.task_outputs[arg.enum_source]) {
+          this.$set(this.$root.$data.task_outputs, arg.enum_source, [])
+        }
+      }
+
+      return this.$root.$data.task_outputs
     }
   },
 
   methods: {
     run() {
-      fetch(`/api/v1/task/${this.name}`, {method: 'POST'})
+      let params = new URLSearchParams("");
+      for(let arg in this.args) {
+        params.append(arg, this.args[arg]);
+      }
+      fetch(`/api/v1/task/${this.name}?${params}`, {method: 'POST'})
     },
 
     stop() {
@@ -156,7 +150,7 @@ Vue.component('task', {
 
     show_output() {
       window.location = `#task/${this.name}/output`
-    }
+    },
   }
 })
 
@@ -172,7 +166,6 @@ const TaskOutput = Vue.extend({
   },
 
   async mounted() {
-    console.log(this.name)
     let resp = await fetch(`/api/v1/task/${this.name}/output`)
     let reader = resp.body.getReader()
     var {done, value} = await reader.read()
@@ -227,4 +220,9 @@ const routes = [
 
 const router = new VueRouter({ routes })
 
-var app = new Vue({el: '#app', router})
+Vue.component('vue-select', window.VueSelect.VueSelect)
+var app = new Vue({
+  el: '#app',
+  data: {tasks: {}, task_outputs: {}},
+  router
+})
