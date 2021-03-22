@@ -57,7 +57,8 @@ pub struct TaskState {
     pub last_lines: usize,
     pub output: BytesMut,
     pub events: BroadcastChannel<TaskOutput>,
-    pub data: HashMap<String, String>
+    pub data: HashMap<String, String>,
+    pub arguments: HashMap<String, String>,
 }
 
 impl TaskState {
@@ -69,7 +70,8 @@ impl TaskState {
             last_lines: 0,
             output: BytesMut::new(),
             events: BroadcastChannel::new(16),
-            data: HashMap::new()
+            data: HashMap::new(),
+            arguments: HashMap::new(),
         }
     }
 }
@@ -116,7 +118,7 @@ pub async fn spawn_task(global_events: Sender<Event>, task: Arc<RwLock<TaskState
         let mut runtime = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
         runtime.block_on(async move {
             task.write().status = TaskStatus::Running;
-            send_message(&global_events, Event::Started(task_name.clone()));
+            send_message(&global_events, Event::Started(task_name.clone(), task.read().arguments.clone()));
             let mut closed = 0u8;
             while closed < 2 {
                 poll.poll(&mut events, None).unwrap();

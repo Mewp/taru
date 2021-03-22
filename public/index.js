@@ -1,6 +1,6 @@
 async function fetchTasks() {
   const tasks = await (await fetch("/api/v1/tasks")).json()
-  let table = document.getElementById('tasks'); 
+  let table = document.getElementById('tasks');
   for(let task of tasks) {
     let row = table.insertRow();
     let nameCell = row.insertCell();
@@ -31,6 +31,7 @@ const TaskList = Vue.extend({
       this.eventSource.addEventListener('started', (e) => {
         let data = JSON.parse(e.data)
         this.tasks[data.task].state = 'running'
+        this.tasks[data.task].argument_values = data.arguments
       })
 
       this.eventSource.addEventListener('finished', (e) => {
@@ -111,27 +112,25 @@ Vue.component('task', {
     if(window.location.hash == `#task/${this.name}/output`) {
       this.output_shown = true
     }
-
-    for(let arg of this.task.arguments) {
-      if(!this.$root.$data.task_outputs[arg.enum_source].length) {
-        let resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'})
-        let data = await resp.text()
-        data = data.trim().split("\n");
-        this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
-      }
-      this.$set(this.args, arg.name, this.$root.$data.task_outputs[arg.enum_source][0]);
-    }
   },
 
-  computed: {
-    arg_values() {
-      for(let arg of this.task.arguments) {
-        if(!this.$root.$data.task_outputs[arg.enum_source]) {
-          this.$set(this.$root.$data.task_outputs, arg.enum_source, [])
+  asyncComputed: {
+    arg_values: {
+      default: [],
+      lazy: true,
+      async get() {
+        for(let arg of this.task.arguments) {
+          if(!this.$root.$data.task_outputs[arg.enum_source]?.length) {
+            let resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'})
+            let data = await resp.text()
+            data = data.trim().split("\n");
+            this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
+          }
+          this.$set(this.args, arg.name, this.$root.$data.task_outputs[arg.enum_source][0]);
         }
-      }
 
-      return this.$root.$data.task_outputs
+        return this.$root.$data.task_outputs
+      }
     }
   },
 
@@ -181,11 +180,11 @@ const TaskOutput = Vue.extend({
       let start = 0;
       let i = 0;
       for(; i < value.length; i++) {
-        if(value[i] != 0x1b) continue
+        if(value[i] != 0x1b) continue // 0x1b == ESC
         output += decoder.decode(value.slice(start, i));
         i++
         start = i
-        if(value[i] != 0x5b) continue // '['
+        if(value[i] != 0x5b) continue // 0x5b == '['
         // If the command starts with a number, parse it.
         let num = 0
         while(value[++i] >= 0x30 && value[i] <= 0x39) {
@@ -221,6 +220,7 @@ const routes = [
 const router = new VueRouter({ routes })
 
 Vue.component('vue-select', window.VueSelect.VueSelect)
+Vue.use(AsyncComputed)
 var app = new Vue({
   el: '#app',
   data: {tasks: {}, task_outputs: {}},

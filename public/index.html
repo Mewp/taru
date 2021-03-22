@@ -7,6 +7,7 @@
         <script src="https://cdn.jsdelivr.net/npm/vue-router@3.3.4" integrity="sha384-5ysQLF+E+9b/+wTnlloO2ONS/4Hy5q6LeqxMyyGo9thRvTM1fuX3HjtghzRbHORv" crossorigin="anonymous"></script>
         <script src="https://cdn.jsdelivr.net/npm/luxon@1.25.0/build/global/luxon.min.js" integrity="sha384-D3h8dHOchE4dpiSVF7wlFB9zw6Zq36WzHs85BgdKSSzLi7iamPNts7BGXd1qmz3y" crossorigin="anonymous"></script>
         <script src="https://cdn.jsdelivr.net/npm/vue-select@3.11.2/dist/vue-select.min.js" integrity="sha384-+DuwySt9/V4X8jnNrpdUumsBUBmj2yMfKCQbJdH2Zkdddy72uzvNwaNXZ+8k2R/B" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/vue-async-computed@3.9.0/dist/vue-async-computed.min.js" integrity="sha384-ieE1yiiXIaSr1kQkBIRL5PlBu4zG1VagSb9TrTWsN2mkiV01BM5GDc//qde+OL4z" crossorigin="anonymous"></script>
         <link rel="stylesheet" href="/style.css">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vue-select@3.11.2/dist/vue-select.css" integrity="sha256-UOIZG7xYf0GO+FyQ44Mg1IMCo/2Y5T5ar2OooAanClQ=" crossorigin="anonymous">
     </head>
@@ -40,8 +41,10 @@
                 </a>
               </td>
               <td>
-                  <div v-for="arg in task.arguments" style="white-space: nowrap">
-                    <span>{{arg.name}}:</span> <vue-select v-if="arg.datatype == 'Enum'" v-model="args[arg.name]" :options="arg_values[arg.enum_source]" :clearable="false">
+                  <div v-for="arg in task.arguments" style="white-space: nowrap" v-if="arg.datatype == 'Enum'">
+                    <span>{{arg.name}}:</span>
+                    <span v-if="task.state == 'running' || !task.can_run">{{task.argument_values[arg.name]}}</span>
+                    <vue-select v-else v-model="args[arg.name]" :options="arg_values[arg.enum_source]" :clearable="false">
                   </div>
               </td>
               <td>

@@ -40,6 +40,7 @@ struct TaskData<'a> {
     meta: &'a serde_json::Value,
     data: HashMap<String, String>,
     arguments: &'a Vec<cfg::Argument>,
+    argument_values: HashMap<String, String>,
     state: &'static str,
     exit_code: Option<i32>,
     can_run: bool,
@@ -91,6 +92,7 @@ async fn tasks(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> Http
                     task::TaskStatus::Finished(_) => "finished"
                 },
                 arguments: &data.config.tasks[name].arguments,
+                argument_values: task.arguments.clone(),
                 exit_code: task.status.as_finished(),
                 can_run: can_run.contains(name),
                 can_view_output: can_view_output.contains(name)
@@ -115,6 +117,7 @@ async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, pa
     let post = if let Ok(payload) = web::Form::<HashMap<String, String>>::extract(req).await {
         payload.into_inner()
     } else { HashMap::new() };
+
     for arg in &task.arguments {
         if let Some(value) = params.get(&arg.name).or(post.get(&arg.name)) {
             if arg.datatype == cfg::ArgumentType::Int && value.parse::<i32>().is_err() {
@@ -138,6 +141,7 @@ async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, pa
                 }
             }
             args.insert(arg.name.clone(), value.clone());
+            state.write().arguments.insert(arg.name.clone(), value.clone());
         } else {
             return Err(HttpResponse::BadRequest().body(format!("Missing argument {}", arg.name)));
         }
@@ -339,7 +343,7 @@ async fn task_change_data(req: HttpRequest, mut body: web::Payload, data: web::D
     while let Some(item) = body.next().await {
         bytes.extend_from_slice(&item?);
     }
-    
+
     let data_read = data.read();
     let mut task = data_read.tasks.get(&params.0).unwrap().write();
     let value = String::from_utf8_lossy(&bytes).into_owned();
@@ -359,7 +363,7 @@ async fn sse(req: HttpRequest, data: web::Data<Arc<RwLock<AppState>>>) -> HttpRe
         match result {
             Ok(event) => {
                 match &event {
-                    Event::Started(name)
+                    Event::Started(name, _)
                     | Event::Finished(name, _) => if !task_access.contains(name) {
                         return future::ready(None)
                     },
