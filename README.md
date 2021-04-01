@@ -187,6 +187,5 @@ Roadmap
 
 There are some features planned for the future:
 
-  * Task parameters – currently you can't pass any to a task.
-  * Updatable task metadata, so that other software can e.g. estimate completion times and store this information along with a task.
   * More responsive web interface
+  * Passing the current username to tasks
