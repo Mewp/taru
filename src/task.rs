@@ -20,6 +20,8 @@ const TOKEN_STDOUT: Token = Token(0);
 const TOKEN_STDERR: Token = Token(1);
 const BUF_SIZE: usize = 10240;
 
+pub struct TaskAlreadyRunning;
+
 #[derive(Debug, Serialize, Clone)]
 pub enum TaskOutput {
     Stdout(Vec<u8>),
@@ -88,14 +90,18 @@ fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
     Ok(())
 }
 
-pub async fn spawn_task(global_events: Sender<Event>, task: Arc<RwLock<TaskState>>, cmdline: &Vec<String>, buffer: bool) {
+pub async fn spawn_task(global_events: Sender<Event>, task: Arc<RwLock<TaskState>>, cmdline: &Vec<String>, buffer: bool) -> Result<(), TaskAlreadyRunning> {
     // This is a mio-based implementation of running a process asynchronously and capturing its
     // stdout and stderr. Mio is used here directly because in order to preserve the order of
     // wakeup events, we need to use one Poll for both streams.
     let (mut reader_out, writer_out) = pipe().unwrap();
     let (mut reader_err, writer_err) = pipe().unwrap();
     let mut cmd = Command::new("systemd-run");
-    cmd.args(&["--user", "--quiet", "--scope", "--collect", &format!("--unit=taru-task-{}", task.read().name)]);
+    let mut task_locked = task.write();
+    if task_locked.status == TaskStatus::Running {
+        return Err(TaskAlreadyRunning)
+    }
+    cmd.args(&["--user", "--quiet", "--scope", "--collect", &format!("--unit=taru-task-{}", task_locked.name)]);
     cmd.args(cmdline);
     cmd.stdin(Stdio::null());
     cmd.stdout(writer_out);
@@ -109,16 +115,17 @@ pub async fn spawn_task(global_events: Sender<Event>, task: Arc<RwLock<TaskState
     let mut child = cmd.spawn().unwrap();
     let mut buf = Box::new([0u8; BUF_SIZE]);
     drop(cmd);  // crucial to drop writing pipes
-    let task_name = task.read().name.clone();
-    let task_events = task.read().events.clone();
+    let task_name = task_locked.name.clone();
+    let task_events = task_locked.events.clone();
+    task_locked.status = TaskStatus::Running;
+    send_message(&global_events, Event::Started(task_name.clone(), task_locked.arguments.clone()));
+    drop(task_locked);
     std::thread::Builder::new().name(format!("task {}", task_name)).spawn(move || {
         // A new thread requires a new tokio runtime,
         // and a new thread is required because mio is blocking.
         // Now if I could have just added a new scheduler to tokio, it would have been easier.
         let mut runtime = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
         runtime.block_on(async move {
-            task.write().status = TaskStatus::Running;
-            send_message(&global_events, Event::Started(task_name.clone(), task.read().arguments.clone()));
             let mut closed = 0u8;
             while closed < 2 {
                 poll.poll(&mut events, None).unwrap();
@@ -166,6 +173,8 @@ pub async fn spawn_task(global_events: Sender<Event>, task: Arc<RwLock<TaskState
             send_message(&global_events, Event::Finished(task_name.clone(), code));
         });
     }).unwrap();
+
+    Ok(())
 }
 
 // This can be async, because it deosn't stream the output

@@ -157,7 +157,9 @@ async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, pa
 
     state.write().output = BytesMut::new();
     let is_buffered = task.buffered;
-    tokio::spawn(async move { task::spawn_task(events, state, &cmdline, is_buffered).await });
+    if task::spawn_task(events, state, &cmdline, is_buffered).await.is_err() {
+        return Err(HttpResponse::Conflict().body("The task is already running. Refusing to run two instances in parallel."));
+    }
 
     Ok(())
 }
