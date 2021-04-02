@@ -122,6 +122,7 @@ Vue.component('task', {
         for(let arg of this.task.arguments) {
           if(!this.$root.$data.task_outputs[arg.enum_source]?.length) {
             let resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'})
+            if(!resp.ok) continue;
             let data = await resp.text()
             data = data.trim().split("\n");
             this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
