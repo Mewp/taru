@@ -171,7 +171,7 @@ Vue.component('task', {
 
 const TaskOutput = Vue.extend({
   template: `
-    <div class="output" v-html="output"></div>
+    <div class="output" ref="output"></div>
   `,
   props: ['name'],
   data() {
@@ -184,45 +184,15 @@ const TaskOutput = Vue.extend({
     let resp = await fetch(`/api/v1/task/${this.name}/output`)
     let reader = resp.body.getReader()
     var {done, value} = await reader.read()
-    let decoder = new TextDecoder();
-    let current_color = 7;
-    let bold = false;
-    let colors = [
-      ['black', '#cd0000', '#00cd00', '#cdcd00', '#6D6DFF', '#cd00cd', '#00cdcd', '#D3D7CF'],
-      ['#7f7f7f', '#ff0000', '#00ff00', '#FCE94F', '#5C5CFF', '#ff00ff', '#00ffff', '#ffffff']
-    ]
-    let output = "<span>";
+
+    const term = new Terminal({theme: {background: '#1b1d1e'}});
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(this.$refs.output);
+    fitAddon.fit();
+
     while(!done) {
-      let start = 0;
-      let i = 0;
-      for(; i < value.length; i++) {
-        if(value[i] != 0x1b) continue // 0x1b == ESC
-        output += decoder.decode(value.slice(start, i));
-        i++
-        start = i
-        if(value[i] != 0x5b) continue // 0x5b == '['
-        // If the command starts with a number, parse it.
-        let num = 0
-        while(value[++i] >= 0x30 && value[i] <= 0x39) {
-          num *= 10
-          num += value[i] - 0x30
-        }
-        if(value[i] == 0x6d) { // Select Graphic Rendition, what we're interested in.
-          if(num == 0) {
-            bold = false
-            current_color = 7
-            output += '</span><span>'
-          } else if(num == 1) {
-            bold = true
-            output += `</span><span style="color: ${colors[+bold][current_color]}; font-weight: 700">`
-          } else if(num >= 30 && num <= 37) {
-            output += `<span style="color: ${colors[+bold][num-30]}">`
-          }
-        }
-        start = i+1
-      }
-      output += decoder.decode(value.slice(start, i))
-      this.output = output + "</span>";
+      term.write(value);
       var {done, value} = await reader.read()
     }
   }
