@@ -148,8 +148,18 @@ async fn run_task(req: &HttpRequest, data: &web::Data<Arc<RwLock<AppState>>>, pa
     }
 
     let cmdline = task.command.iter().map(|segment|
-        if segment.starts_with("$") && args.contains_key(&segment[1..]) {
-            args.get(&segment[1..]).unwrap().clone()
+        if segment.starts_with("$") {
+            if args.contains_key(&segment[1..]) {
+                args.get(&segment[1..]).unwrap().clone()
+            } else if segment == "$taru_user" {
+                if let Some(Ok(login)) = req.headers().get("x-user").map(|h| h.to_str()) {
+                    login.to_owned()
+                } else {
+                    String::new()
+                }
+            } else {
+                segment.clone()
+            }
         } else {
             segment.clone()
         }

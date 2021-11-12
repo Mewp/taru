@@ -99,7 +99,9 @@ All endpoints that run tasks accept arguments as either parameters in the url qu
 
 Users
 -----
-If you define it, Taru will require users to authenticate by setting the X-User header to their username. Typically, this is done by using a reverse proxy, such as nginx, to authenticate using the desired method, then pass the result as X-User.
+If you define it, Taru will require users to authenticate by setting the `X-User` header to their username. Typically, this is done by using a reverse proxy, such as nginx, to authenticate using the desired method, then pass the result as `X-User`.
+
+The value of the `X-User` header is always available as the `$taru_user` variable that you can pass as an argument to a task.
 
 Each use can has three kinds of permissions:
 

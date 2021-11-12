@@ -1520,7 +1520,7 @@ dependencies = [
 
 [[package]]
 name = "taru"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "actix-files",
  "actix-rt",
