@@ -9,12 +9,11 @@ async function fetchTasks() {
 }
 
 const TaskList = Vue.extend({
-  template: `<table class="task-list">
-    <task v-for="(task, name) in tasks" ref="tasks" :task="task" :name="name" :key="name" />
-  </table>`,
+  template: '#task-list-template',
   data() {
     return {
       tasks: {},
+      task_categories: {},
       task_ids: {}
     }
   },
@@ -43,8 +42,12 @@ const TaskList = Vue.extend({
 
       this.eventSource.addEventListener('update_config', async () => {
         let tasks = await (await fetch("/api/v1/tasks")).json()
+        let categories = {};
         for(let task of Object.keys(tasks).sort()) {
           this.$set(this.tasks, task, tasks[task])
+          let category = tasks[task].meta?.category || '';
+          categories[category] = categories[category] || [];
+          categories[category].push(task);
         }
 
         for(let task in this.tasks) {
@@ -52,6 +55,7 @@ const TaskList = Vue.extend({
             this.$delete(this.tasks, task)
           }
         }
+        this.task_categories = categories;
       })
 
       this.eventSource.addEventListener('change_data', () => {
@@ -73,9 +77,16 @@ const TaskList = Vue.extend({
   async mounted() {
     let tasks = await (await fetch("/api/v1/tasks")).json()
     this.tasks = this.$root.$data.tasks;
+    let categories = {};
     for(let task of Object.keys(tasks).sort()) {
       this.$set(this.tasks, task, tasks[task])
+      console.log(tasks[task].data)
+      let category = tasks[task].meta?.category || '';
+      categories[category] = categories[category] || [];
+      categories[category].push(task);
     }
+
+    this.task_categories = categories;
 
     this.initSse()
 

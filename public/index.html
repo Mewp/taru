@@ -15,6 +15,16 @@
         <div id="app">
             <router-view />
         </div>
+        <script type="application/x-template" id="task-list-template">
+          <div>{{console.log(task_categories)}}
+          <div class="category" v-for="(task_names, category) in task_categories">
+            <h2>{{category}}</h2>
+            <table class="task-list">
+              <task v-for="name in task_names" ref="tasks" :task="tasks[name]" :name="name" :key="name" />
+            </table>
+          </div>
+          </div>
+        </script>
         <script type="application/x-template" id="task-template">
             <tr>
               <td>
