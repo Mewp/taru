@@ -185,7 +185,7 @@ const TaskOutput = Vue.extend({
     let reader = resp.body.getReader()
     var {done, value} = await reader.read()
 
-    const term = new Terminal({theme: {background: '#1b1d1e'}});
+    const term = new Terminal({convertEol: true, theme: {background: '#1b1d1e'}});
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(this.$refs.output);
