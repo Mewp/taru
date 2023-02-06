@@ -1,7 +1,7 @@
 {
   description = "A simple task runner";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-20.09";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-22.11";
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
   outputs = { self, nixpkgs, flake-utils }: {
@@ -145,7 +145,7 @@
 
     overlay = final: prev:
       let
-        cargo_nix = prev.callPackage ./Cargo.nix {};
+        cargo_nix = import ./Cargo.nix { pkgs = prev; };
         rust_drv = cargo_nix.rootCrate.build;
       in {
         taru = prev.stdenv.mkDerivation {
@@ -172,9 +172,14 @@
         in pkgs.taru;
 
 
-      defaultApp = {
+      apps.default = {
         type = "app";
         program = "${defaultPackage}/bin/taru";
+      };
+
+      apps.crate2nix = {
+        type = "app";
+        program = "${nixpkgs.legacyPackages.${system}.crate2nix}/bin/crate2nix";
       };
     })
   );

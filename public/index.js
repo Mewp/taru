@@ -33,11 +33,22 @@ const TaskList = Vue.extend({
         this.tasks[data.task].argument_values = data.arguments
       })
 
-      this.eventSource.addEventListener('finished', (e) => {
+      this.eventSource.addEventListener('finished', async (e) => {
         let data = JSON.parse(e.data)
         let task = this.tasks[data.task]
         task.state = 'finished'
         task.exit_code = data.exit_code
+        if(!this.$root.$data.task_outputs.hasOwnProperty(data.task)) return;
+        let resp = await fetch(`/api/v1/task/${data.task}/output`);
+        let text = await resp.text();
+        this.$set(this.$root.$data.task_outputs, data.task, text.trim().split("\n"));
+        for(let task of this.$refs.tasks) {
+          for(let arg of task.task.arguments) {
+            if(arg.enum_source == data.task) {
+              task.updateArgs();
+            }
+          }
+        }
       })
 
       this.eventSource.addEventListener('update_config', async () => {
@@ -80,7 +91,6 @@ const TaskList = Vue.extend({
     let categories = {};
     for(let task of Object.keys(tasks).sort()) {
       this.$set(this.tasks, task, tasks[task])
-      console.log(tasks[task].data)
       let category = tasks[task].meta?.category || '';
       categories[category] = categories[category] || [];
       categories[category].push(task);
@@ -113,6 +123,7 @@ Vue.component('task', {
   data() {
     return {
       args: {},
+      arg_values: {},
       output_shown: false,
       since: null,
       interval: null,
@@ -123,34 +134,45 @@ Vue.component('task', {
     if(window.location.hash == `#task/${this.name}/output`) {
       this.output_shown = true
     }
-  },
-
-  asyncComputed: {
-    arg_values: {
-      default: [],
-      lazy: true,
-      async get() {
-        for(let arg of this.task.arguments) {
-          if(this.$root.$data.task_outputs[arg.enum_source] === undefined) {
-            const promise = fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'}).then((resp) => {
-              if(!resp.ok) return;
-              return resp.text();
-            }).then((data) => {
-              data = data.trim().split("\n");
-              this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
-            });
-            this.$root.$data.task_outputs[arg.enum_source] = promise;
+    for(let arg of this.task.arguments) {
+      if(this.$root.$data.task_outputs[arg.enum_source] === undefined) {
+        const promise = new Promise(async (resolve, reject) => {
+          let resp = await fetch(`/api/v1/task/${arg.enum_source}/output`);
+          let data = await resp.text();
+          if(data.length == 0) {
+            resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'});
+            if(!resp.ok) return reject();
+            data = await resp.text();
           }
-          const data = await this.$root.$data.task_outputs[arg.enum_source];
-          this.$set(this.args, arg.name, this.$root.$data.task_outputs[arg.enum_source][0]);
-        }
-
-        return this.$root.$data.task_outputs
+          data = data.trim().split("\n");
+          this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
+          resolve(data);
+        });
+        this.$root.$data.task_outputs[arg.enum_source] = promise;
       }
+      const data = await this.$root.$data.task_outputs[arg.enum_source];
+      this.$set(this.args, arg.name, data[0]);
+      this.arg_values[arg.enum_source] = data;
     }
   },
 
   methods: {
+    updateArgs() {
+      for(let arg of this.task.arguments) {
+        const data = this.$root.$data.task_outputs[arg.enum_source];
+        const val = this.args[arg.name];
+        // The select doesn't seem to update properly when this value isn't actually changed.
+        // So we make sure it changes.
+        this.$set(this.args, arg.name, null);
+        if(data.includes(val)) {
+          this.$set(this.args, arg.name, val);
+        } else {
+          this.$set(this.args, arg.name, data[0]);
+        }
+        this.arg_values[arg.enum_source] = data;
+      }
+    },
+
     run() {
       let params = new URLSearchParams("");
       for(let arg in this.args) {
@@ -206,7 +228,6 @@ const routes = [
 const router = new VueRouter({ routes })
 
 Vue.component('vue-select', window.VueSelect.VueSelect)
-Vue.use(AsyncComputed)
 var app = new Vue({
   el: '#app',
   data: {tasks: {}, task_outputs: {}},
