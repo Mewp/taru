@@ -137,13 +137,9 @@ Vue.component('task', {
     for(let arg of this.task.arguments) {
       if(this.$root.$data.task_outputs[arg.enum_source] === undefined) {
         const promise = new Promise(async (resolve, reject) => {
-          let resp = await fetch(`/api/v1/task/${arg.enum_source}/output`);
-          let data = await resp.text();
-          if(data.length == 0) {
-            resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'});
-            if(!resp.ok) return reject();
-            data = await resp.text();
-          }
+          resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'});
+          if(!resp.ok) return reject();
+          data = await resp.text();
           data = data.trim().split("\n");
           this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
           resolve(data);
