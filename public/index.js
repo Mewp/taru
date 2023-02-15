@@ -139,7 +139,7 @@ Vue.component('task', {
         const promise = new Promise(async (resolve, reject) => {
           resp = await fetch(`/api/v1/task/${arg.enum_source}/output`, {method: 'POST'});
           if(!resp.ok) return reject();
-          data = await resp.text();
+          let data = await resp.text();
           data = data.trim().split("\n");
           this.$set(this.$root.$data.task_outputs, arg.enum_source, data);
           resolve(data);
